@@ -1,12 +1,20 @@
 from .ner import one_shot_ner_paragraph, one_shot_ner_output
 from ...utils.llm_utils import convert_format_to_template
 
-ner_conditioned_re_system = """Your task is to construct an RDF (Resource Description Framework) graph from the given passages and named entity lists. 
-Respond with a JSON list of triples, with each triple representing a relationship in the RDF graph. 
+ner_conditioned_re_system = """Your task is to construct an RDF (Resource Description Framework) graph from the given passages and named entity lists.
+Respond with a JSON list of triples, with each triple representing a relationship in the RDF graph.
 
 Pay attention to the following requirements:
 - Each triple should contain at least one, but preferably two, of the named entities in the list for each passage.
 - Clearly resolve pronouns to their specific names to maintain clarity.
+
+CRITICAL - LANGUAGE PRESERVATION:
+- Keep ALL entities in the SAME LANGUAGE as the source text
+- If the passage is in Bangla, use Bangla entities (e.g., "অনুপম" not "Anupam")
+- If the passage is in Hindi, use Hindi entities
+- Do NOT translate entities or predicates to English
+- Preserve the original script and spelling exactly
+- Predicates can be in English for consistency, but entities MUST match the source language
 
 """
 

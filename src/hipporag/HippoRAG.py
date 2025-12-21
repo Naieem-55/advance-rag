@@ -172,6 +172,13 @@ class HippoRAG:
         self.use_reranker = True  # Enable reranking by default
         self.reranker = get_reranker(reranker_type="gemini", model_name=self.global_config.llm_name)
 
+        # Answer verification to prevent hallucination
+        self.use_answer_verification = True
+        self.verification_confidence_threshold = 0.5
+
+        # Query expansion for better recall
+        self.use_query_expansion = True  # Enable query expansion by default
+
         self.ready_to_retrieve = False
 
         self.ppr_time = 0
@@ -418,6 +425,13 @@ class HippoRAG:
 
         if not self.ready_to_retrieve:
             self.prepare_retrieval_objects()
+
+        # Query expansion for better recall
+        if self.use_query_expansion:
+            original_queries = queries.copy()
+            queries = [self.expand_query(q) for q in tqdm(queries, desc="Expanding queries")]
+            # Store original queries for reference
+            self._original_queries = original_queries
 
         self.get_query_embeddings(queries)
 
@@ -706,6 +720,91 @@ class HippoRAG:
         else:
             return queries_solutions, all_response_message, all_metadata
 
+    def verify_answer(self, question: str, answer: str, passages: List[str]) -> Tuple[bool, float, str]:
+        """
+        Verify if an answer is grounded in the provided passages.
+
+        Args:
+            question: The original question
+            answer: The proposed answer to verify
+            passages: List of passage texts used to generate the answer
+
+        Returns:
+            Tuple of (verified: bool, confidence: float, evidence: str)
+        """
+        import json
+
+        # Skip verification for "not found" responses
+        if "not found" in answer.lower() or "information not found" in answer.lower():
+            return True, 1.0, "Answer indicates information was not found"
+
+        # Format passages for the prompt
+        passages_text = "\n\n".join([f"Passage {i+1}: {p}" for i, p in enumerate(passages)])
+
+        try:
+            verification_messages = self.prompt_template_manager.render(
+                name='answer_verification',
+                passages=passages_text,
+                question=question,
+                answer=answer
+            )
+
+            result, metadata, cache_hit = self.llm_model.infer(verification_messages)
+
+            # Parse JSON response
+            # Try to extract JSON from response
+            import re
+            json_match = re.search(r'\{[^{}]*\}', result, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                verified = parsed.get('verified', False)
+                confidence = float(parsed.get('confidence', 0.0))
+                evidence = parsed.get('evidence', '')
+                return verified, confidence, evidence
+            else:
+                logger.warning(f"Could not parse verification response: {result}")
+                return True, 0.5, "Verification parse error"
+
+        except Exception as e:
+            logger.warning(f"Answer verification error: {e}")
+            return True, 0.5, f"Verification error: {str(e)}"
+
+    def expand_query(self, query: str) -> str:
+        """
+        Expand a query with synonyms and related terms to improve recall.
+
+        Args:
+            query: The original query string
+
+        Returns:
+            Expanded query string combining original and expanded terms
+        """
+        import json
+        import re
+
+        try:
+            expansion_messages = self.prompt_template_manager.render(
+                name='query_expansion',
+                query=query
+            )
+
+            result, metadata, cache_hit = self.llm_model.infer(expansion_messages)
+
+            # Parse JSON response
+            json_match = re.search(r'\{[^{}]*\}', result, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                expanded_query = parsed.get('expanded_query', query)
+                logger.debug(f"Query expanded: '{query}' -> '{expanded_query}'")
+                return expanded_query
+            else:
+                logger.warning(f"Could not parse query expansion response")
+                return query
+
+        except Exception as e:
+            logger.warning(f"Query expansion error: {e}")
+            return query
+
     def qa(self, queries: List[QuerySolution]) -> Tuple[List[QuerySolution], List[str], List[Dict]]:
         """
         Executes question-answering (QA) inference using a provided set of query solutions and a language model.
@@ -764,6 +863,24 @@ class HippoRAG:
             except Exception as e:
                 logger.warning(f"Error in parsing the answer from the raw LLM QA inference response: {str(e)}!")
                 pred_ans = response_content
+
+            # Answer verification to prevent hallucination
+            if self.use_answer_verification:
+                retrieved_passages = query_solution.docs[:self.global_config.qa_top_k]
+                verified, confidence, evidence = self.verify_answer(
+                    question=query_solution.question,
+                    answer=pred_ans,
+                    passages=retrieved_passages
+                )
+
+                # Store verification metadata
+                query_solution.verification_confidence = confidence
+                query_solution.verification_evidence = evidence
+
+                # Replace answer if not verified or low confidence
+                if not verified or confidence < self.verification_confidence_threshold:
+                    logger.info(f"Answer not verified (confidence={confidence:.2f}). Replacing with fallback.")
+                    pred_ans = "Information not found in the provided documents."
 
             query_solution.answer = pred_ans
             queries_solutions.append(query_solution)

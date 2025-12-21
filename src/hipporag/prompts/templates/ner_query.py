@@ -1,4 +1,11 @@
 ner_system = """You're a very effective entity extraction system.
+
+CRITICAL: Extract entities in the SAME LANGUAGE as the input question.
+- If the question is in Bangla/Bengali, extract Bangla entities (e.g., "অনুপম" not "Anupam")
+- If the question is in Hindi, extract Hindi entities
+- If the question is in English, extract English entities
+- Do NOT translate entities to another language
+- Preserve the original script and spelling exactly as written
 """
 
 query_prompt_one_shot_input = """Please extract all named entities that are important for solving the questions below.

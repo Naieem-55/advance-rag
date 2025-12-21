@@ -1,4 +1,13 @@
-ner_system = """Your task is to extract named entities from the given paragraph. 
+ner_system = """Your task is to extract named entities from the given paragraph.
+
+CRITICAL: Extract entities in the SAME LANGUAGE as the input text.
+- If the text is in Bangla/Bengali, extract Bangla entities (e.g., "অনুপম" not "Anupam")
+- If the text is in Hindi, extract Hindi entities
+- If the text is in English, extract English entities
+- Do NOT translate entities to another language
+- Preserve the original script and spelling exactly as written
+
+Extract: Person names, Organizations, Locations, Dates, Events, Products, etc.
 Respond with a JSON list of entities.
 """
 
