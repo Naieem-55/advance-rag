@@ -9,7 +9,10 @@ An advanced Retrieval-Augmented Generation (RAG) system built on top of HippoRAG
 - Multiple embedding model support (NV-Embed, GritLM, Gemini, OpenAI)
 - BM25 retriever for hybrid search
 - Cross-encoder reranker for improved result ranking
+- Query expansion for better retrieval
+- Answer verification for response validation
 - Grounded QA with source citations
+- Improved NER and triple extraction prompts
 - Knowledge graph visualization tools
 - REST API server for easy integration
 
