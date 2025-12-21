@@ -258,17 +258,27 @@ async def ask_question(request: QuestionRequest):
 
             answer = query_solution.answer if query_solution.answer else "No answer found"
 
+            # Check if answer indicates "not found" - return empty references
+            not_found_indicators = [
+                "not found", "information not found", "no information",
+                "পাওয়া যায়নি", "তথ্য পাওয়া যায়নি"  # Bangla equivalents
+            ]
+            is_not_found = any(indicator in answer.lower() for indicator in not_found_indicators)
+
             # Extract references from docs and doc_scores
             references = []
-            docs = query_solution.docs if query_solution.docs else []
-            scores = query_solution.doc_scores if query_solution.doc_scores is not None else []
+            if not is_not_found:
+                docs = query_solution.docs if query_solution.docs else []
+                scores = query_solution.doc_scores if query_solution.doc_scores is not None else []
 
-            for i, doc in enumerate(docs[:5]):  # Top 5 references
-                score = float(scores[i]) if i < len(scores) else 0.0
-                references.append(Reference(
-                    content=doc[:500] + "..." if len(doc) > 500 else doc,
-                    score=score
-                ))
+                for i, doc in enumerate(docs[:5]):  # Top 5 references
+                    score = float(scores[i]) if i < len(scores) else 0.0
+                    # Only include references with meaningful scores (> 0.01)
+                    if score > 0.01:
+                        references.append(Reference(
+                            content=doc[:500] + "..." if len(doc) > 500 else doc,
+                            score=score
+                        ))
 
             return AnswerResponse(
                 question=request.question,

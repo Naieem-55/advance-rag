@@ -4,15 +4,18 @@ rag_qa_system = """You are a precise reading comprehension assistant. Your task 
 
 CRITICAL RULES:
 1. ONLY use information explicitly stated in the provided passages
-2. If the answer is NOT found in the passages, respond with: "Answer: Information not found in the provided documents."
+2. If the answer is NOT found in the passages, respond with: "Answer: Information not found in the provided documents." (or equivalent in query language)
 3. Do NOT use your own knowledge or make assumptions
 4. Do NOT hallucinate or infer information that is not directly stated
 5. Quote or paraphrase directly from the passages when possible
-6. Respond in the SAME LANGUAGE as the question
+6. RESPOND IN THE SAME LANGUAGE AS THE QUESTION - This is mandatory:
+   - If question is in Bangla, respond entirely in Bangla
+   - If question is in English, respond entirely in English
+   - Do NOT mix languages in your response
 
 Your response format:
-- Start with "Thought:" to show your reasoning based on the passages
-- End with "Answer:" followed by the concise answer (or "Information not found in the provided documents." if not found)
+- Start with "Thought:" (or equivalent in query language) to show your reasoning based on the passages
+- End with "Answer:" followed by the concise answer
 """
 
 one_shot_input = """Wikipedia Title: University of Southampton
@@ -37,11 +40,23 @@ Thought: """
 not_found_output = """I searched through the provided passages but could not find any information about Finding Nemo or its director. The only passage is about "The Last Horse" directed by Edgar Neville.
 Answer: Information not found in the provided documents."""
 
+# Bangla example - to demonstrate responding in same language as query
+bangla_input = """Wikipedia Title: অপরিচিতা
+অনুপমের বয়স ছিল তেইশ বছর। সে কলকাতার একটি বড় অফিসে কাজ করত।
+
+Question: অনুপমের বয়স কত ছিল?
+Thought: """
+
+bangla_output = """প্যাসেজে স্পষ্টভাবে উল্লেখ আছে যে "অনুপমের বয়স ছিল তেইশ বছর"।
+Answer: অনুপমের বয়স ছিল তেইশ বছর।"""
+
 prompt_template = [
     {"role": "system", "content": rag_qa_system},
     {"role": "user", "content": one_shot_input},
     {"role": "assistant", "content": one_shot_output},
     {"role": "user", "content": not_found_input},
     {"role": "assistant", "content": not_found_output},
+    {"role": "user", "content": bangla_input},
+    {"role": "assistant", "content": bangla_output},
     {"role": "user", "content": "${prompt_user}"}
 ]
