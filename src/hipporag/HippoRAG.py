@@ -28,6 +28,8 @@ from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
 from .prompts.linking import get_query_instruction
 from .prompts.prompt_template_manager import PromptTemplateManager
+from .retrieval.bm25_retriever import BM25Retriever, hybrid_score_fusion
+from .retrieval.cross_encoder_reranker import get_reranker
 from .rerank import DSPyFilter
 from .utils.misc_utils import *
 from .utils.misc_utils import NerRawOutput, TripleRawOutput
@@ -159,6 +161,16 @@ class HippoRAG:
         self.openie_results_path = os.path.join(self.global_config.save_dir,f'openie_results_ner_{self.global_config.llm_name.replace("/", "_")}.json')
 
         self.rerank_filter = DSPyFilter(self)
+
+        # BM25 retriever for hybrid search
+        bm25_path = os.path.join(self.working_dir, "bm25_index.pkl")
+        self.bm25_retriever = BM25Retriever(save_path=bm25_path)
+        self.use_hybrid_search = True  # Enable hybrid search by default
+        self.hybrid_alpha = 0.7  # Weight for dense scores (0.7 dense, 0.3 BM25)
+
+        # Cross-encoder reranker for precision
+        self.use_reranker = True  # Enable reranking by default
+        self.reranker = get_reranker(reranker_type="gemini", model_name=self.global_config.llm_name)
 
         self.ready_to_retrieve = False
 
@@ -430,9 +442,31 @@ class HippoRAG:
                                                                                          top_k_fact_indices=top_k_fact_indices,
                                                                                          passage_node_weight=self.global_config.passage_node_weight)
 
-            top_k_docs = [self.chunk_embedding_store.get_row(self.passage_node_keys[idx])["content"] for idx in sorted_doc_ids[:num_to_retrieve]]
+            # Get candidate documents
+            candidate_count = min(num_to_retrieve * 2, len(sorted_doc_ids))  # Get more candidates for reranking
+            candidate_docs = [self.chunk_embedding_store.get_row(self.passage_node_keys[idx])["content"]
+                             for idx in sorted_doc_ids[:candidate_count]]
+            candidate_scores = sorted_doc_scores[:candidate_count]
 
-            retrieval_results.append(QuerySolution(question=query, docs=top_k_docs, doc_scores=sorted_doc_scores[:num_to_retrieve]))
+            # Apply cross-encoder reranking for better precision
+            if self.use_reranker and len(candidate_docs) > 1:
+                try:
+                    reranked_indices, reranked_scores = self.reranker.rerank(
+                        query=query,
+                        documents=candidate_docs,
+                        top_k=num_to_retrieve
+                    )
+                    top_k_docs = [candidate_docs[i] for i in reranked_indices[:num_to_retrieve]]
+                    final_scores = reranked_scores[:num_to_retrieve]
+                except Exception as e:
+                    logger.warning(f"Reranking failed, using original order: {e}")
+                    top_k_docs = candidate_docs[:num_to_retrieve]
+                    final_scores = list(candidate_scores[:num_to_retrieve])
+            else:
+                top_k_docs = candidate_docs[:num_to_retrieve]
+                final_scores = list(candidate_scores[:num_to_retrieve])
+
+            retrieval_results.append(QuerySolution(question=query, docs=top_k_docs, doc_scores=final_scores))
 
         retrieve_end_time = time.time()  # Record end time
 
@@ -703,10 +737,15 @@ class HippoRAG:
             if self.prompt_template_manager.is_template_name_valid(name=f'rag_qa_{self.global_config.dataset}'):
                 # find the corresponding prompt for this dataset
                 prompt_dataset_name = self.global_config.dataset
-            else:
-                # the dataset does not have a customized prompt template yet
+            elif self.prompt_template_manager.is_template_name_valid(name='rag_qa_grounded'):
+                # Use grounded prompt template to prevent hallucination
                 logger.debug(
-                    f"rag_qa_{self.global_config.dataset} does not have a customized prompt template. Using MUSIQUE's prompt template instead.")
+                    f"rag_qa_{self.global_config.dataset} does not have a customized prompt template. Using grounded prompt template.")
+                prompt_dataset_name = 'grounded'
+            else:
+                # fallback to musique if grounded template not available
+                logger.debug(
+                    f"Using MUSIQUE's prompt template as fallback.")
                 prompt_dataset_name = 'musique'
             all_qa_messages.append(
                 self.prompt_template_manager.render(name=f'rag_qa_{prompt_dataset_name}', prompt_user=prompt_user))
@@ -1254,6 +1293,16 @@ class HippoRAG:
             self.ent_node_to_chunk_ids = {}
             self.add_fact_edges(self.passage_node_keys, chunk_triples)
 
+        # Initialize BM25 index for hybrid search
+        if self.use_hybrid_search:
+            if not self.bm25_retriever.load():
+                logger.info("Building BM25 index for hybrid search...")
+                passage_texts = [self.chunk_embedding_store.get_row(key)["content"]
+                                for key in self.passage_node_keys]
+                self.bm25_retriever.index(passage_texts)
+            else:
+                logger.info("BM25 index loaded from cache.")
+
         self.ready_to_retrieve = True
 
     def get_query_embeddings(self, queries: List[str] | List[QuerySolution]):
@@ -1335,6 +1384,7 @@ class HippoRAG:
     def dense_passage_retrieval(self, query: str) -> Tuple[np.ndarray, np.ndarray]:
         """
         Conduct dense passage retrieval to find relevant documents for a query.
+        Optionally uses hybrid search combining dense embeddings with BM25.
 
         This function processes a given query using a pre-trained embedding model
         to generate query embeddings. The similarity scores between the query
@@ -1365,9 +1415,25 @@ class HippoRAG:
         query_doc_scores = np.squeeze(query_doc_scores) if query_doc_scores.ndim == 2 else query_doc_scores
         query_doc_scores = min_max_normalize(query_doc_scores)
 
-        sorted_doc_ids = np.argsort(query_doc_scores)[::-1]
-        sorted_doc_scores = query_doc_scores[sorted_doc_ids.tolist()]
-        return sorted_doc_ids, sorted_doc_scores
+        dense_sorted_ids = np.argsort(query_doc_scores)[::-1]
+        dense_sorted_scores = query_doc_scores[dense_sorted_ids.tolist()]
+
+        # Hybrid search: combine dense and BM25 scores
+        if self.use_hybrid_search and self.bm25_retriever.bm25 is not None:
+            bm25_sorted_ids, bm25_sorted_scores = self.bm25_retriever.search(query)
+
+            if len(bm25_sorted_ids) > 0:
+                sorted_doc_ids, sorted_doc_scores = hybrid_score_fusion(
+                    dense_ids=dense_sorted_ids,
+                    dense_scores=dense_sorted_scores,
+                    bm25_ids=bm25_sorted_ids,
+                    bm25_scores=bm25_sorted_scores,
+                    alpha=self.hybrid_alpha,
+                    num_docs=len(self.passage_node_keys)
+                )
+                return sorted_doc_ids, sorted_doc_scores
+
+        return dense_sorted_ids, dense_sorted_scores
 
 
     def get_top_k_weights(self,
