@@ -193,40 +193,91 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
     if use_dpr_only:
         print(f"Warning: {scores_data.get('warning', 'No facts matched')}")
 
-    # Create network
-    net = Network(height="900px", width="100%", bgcolor="#1a1a2e", font_color="white")
-    net.barnes_hut(gravity=-3000, central_gravity=0.3, spring_length=200)
+    # Create network with professional styling
+    net = Network(height="100vh", width="100vw", bgcolor="#0f1419", font_color="#e7e9ea")
 
-    # Get max PPR score for normalization
+    # Professional physics settings
+    net.set_options('''
+    {
+        "nodes": {
+            "font": {"size": 12, "face": "Inter, -apple-system, BlinkMacSystemFont, sans-serif", "color": "#e7e9ea"},
+            "borderWidth": 2,
+            "borderWidthSelected": 4
+        },
+        "edges": {
+            "color": {"color": "#38444d", "highlight": "#1d9bf0"},
+            "smooth": {"type": "continuous", "roundness": 0.5}
+        },
+        "physics": {
+            "forceAtlas2Based": {
+                "gravitationalConstant": -80,
+                "centralGravity": 0.01,
+                "springLength": 120,
+                "springConstant": 0.08,
+                "avoidOverlap": 0.5
+            },
+            "solver": "forceAtlas2Based",
+            "stabilization": {"iterations": 150, "fit": true}
+        },
+        "interaction": {
+            "hover": true,
+            "tooltipDelay": 50,
+            "hideEdgesOnDrag": true,
+            "hideEdgesOnZoom": true,
+            "zoomView": true,
+            "dragView": true
+        }
+    }
+    ''')
+
+    # Get PPR scores and compute percentiles for better color distribution
     all_ppr = [v['ppr_score'] for v in ppr_scores.values()]
     max_ppr = max(all_ppr) if all_ppr else 1
     min_ppr = min(all_ppr) if all_ppr else 0
 
-    # Color scale: blue (low) -> yellow (medium) -> red (high)
+    # Sort scores to compute percentiles
+    sorted_scores = sorted(all_ppr)
+
+    def get_percentile(score):
+        """Get percentile rank of a score (0-100)"""
+        if len(sorted_scores) <= 1:
+            return 50
+        # Find position in sorted list
+        count_below = sum(1 for s in sorted_scores if s < score)
+        return (count_below / len(sorted_scores)) * 100
+
+    # Store chunk contents for click-to-view
+    chunk_contents = {}
+
+    # Professional color palette based on percentile ranking
     def get_color(score, is_entity=True, is_query_entity=False, is_passage=False):
         if is_query_entity:
-            return "#00ff00"  # Green for query entities
+            return "#00ba7c"  # Green - query seed nodes
 
-        if max_ppr > min_ppr:
-            normalized = (score - min_ppr) / (max_ppr - min_ppr)
-        else:
-            normalized = 0.5
+        percentile = get_percentile(score)
 
         if is_passage:
-            # Blue scale for passages
-            intensity = int(100 + normalized * 155)
-            return f"#{intensity:02x}{intensity:02x}ff"
-        else:
-            # Red-yellow scale for entities
-            if normalized < 0.5:
-                r = int(255 * (normalized * 2))
-                g = 255
-                b = 0
+            # Passage nodes: Blue gradient (professional)
+            if percentile < 50:
+                return "#536471"  # Muted gray - bottom 50%
+            elif percentile < 75:
+                return "#1d9bf0"  # Twitter blue - 50-75%
+            elif percentile < 90:
+                return "#794bc4"  # Purple - 75-90%
             else:
-                r = 255
-                g = int(255 * (1 - (normalized - 0.5) * 2))
-                b = 0
-            return f"#{r:02x}{g:02x}{b:02x}"
+                return "#f91880"  # Pink/Magenta - top 10%
+        else:
+            # Entity nodes: Warm gradient
+            if percentile < 50:
+                return "#536471"  # Muted gray - bottom 50%
+            elif percentile < 70:
+                return "#ffd400"  # Gold - 50-70%
+            elif percentile < 85:
+                return "#ff7a00"  # Orange - 70-85%
+            elif percentile < 95:
+                return "#f4212e"  # Red - 85-95%
+            else:
+                return "#ff00ff"  # Magenta - top 5%
 
     # Add nodes
     for v in hipporag.graph.vs:
@@ -241,21 +292,22 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
         is_passage = hash_id.startswith('chunk')
         is_query_entity = node_name.lower() in query_entities
 
-        # Size based on PPR score
-        if max_ppr > min_ppr:
-            size_factor = (ppr_score - min_ppr) / (max_ppr - min_ppr)
-        else:
-            size_factor = 0.5
+        # Size based on percentile (for better visual distribution)
+        percentile = get_percentile(ppr_score)
+        size_factor = percentile / 100  # 0 to 1 scale
 
         if is_passage:
             base_size = 20
             shape = "box"
-            # Show passage content preview
+            # Show passage content preview and store full content
             try:
                 content = hipporag.chunk_embedding_store.get_row(hash_id)["content"]
                 label = content[:50] + "..." if len(content) > 50 else content
+                # Store full content for click-to-view (escape for JavaScript)
+                chunk_contents[node_name] = content.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
             except:
                 label = "Passage"
+                chunk_contents[node_name] = "Content not available"
         else:
             base_size = 15
             shape = "dot"
@@ -295,33 +347,231 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
 
         net.add_edge(source, target, value=weight, title=f"Weight: {weight:.4f}")
 
-    # Add legend and query info
+    # Count node types for stats
+    has_hash_id = 'hash_id' in hipporag.graph.vs.attributes()
+    entity_count = sum(1 for v in hipporag.graph.vs if has_hash_id and v['hash_id'].startswith('entity'))
+    passage_count = sum(1 for v in hipporag.graph.vs if has_hash_id and v['hash_id'].startswith('chunk'))
+
+    # Professional HTML content
     html_content = f"""
-    <div style="position: fixed; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 10px; color: white; max-width: 400px; z-index: 1000;">
-        <h3 style="margin-top: 0;">Query: "{query}"</h3>
-        <p><b>Query Entities:</b> {', '.join(query_entities) if query_entities else 'None found'}</p>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        * {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; box-sizing: border-box; }}
+        html, body {{ margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #0f1419; }}
+        .card {{ width: 100vw !important; height: 100vh !important; margin: 0 !important; padding: 0 !important; border: none !important; }}
+        #mynetwork {{ width: 100vw !important; height: 100vh !important; position: fixed !important; top: 0 !important; left: 0 !important; border: none !important; }}
+        #loadingBar {{ display: none !important; }}
+
+        .panel {{
+            position: fixed;
+            background: linear-gradient(145deg, rgba(22, 32, 42, 0.98), rgba(15, 20, 25, 0.98));
+            border: 1px solid #38444d;
+            border-radius: 16px;
+            color: #e7e9ea;
+            z-index: 1000;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+        }}
+
+        .panel h3 {{ margin: 0 0 12px 0; font-weight: 600; font-size: 15px; }}
+        .panel p {{ margin: 6px 0; font-size: 13px; line-height: 1.5; }}
+        .panel hr {{ border: none; border-top: 1px solid #38444d; margin: 12px 0; }}
+
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 4px 0;
+        }}
+        .legend-dot {{
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }}
+        .legend-box {{
+            width: 14px;
+            height: 10px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }}
+
+        .stat-card {{
+            background: rgba(29, 155, 240, 0.1);
+            border: 1px solid rgba(29, 155, 240, 0.2);
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin: 8px 0;
+        }}
+        .stat-value {{ font-size: 20px; font-weight: 700; color: #1d9bf0; }}
+        .stat-label {{ font-size: 11px; color: #71767b; text-transform: uppercase; letter-spacing: 0.5px; }}
+
+        .passage-item {{
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            padding: 10px;
+            margin: 8px 0;
+            border-left: 3px solid #1d9bf0;
+        }}
+        .passage-rank {{ color: #1d9bf0; font-weight: 600; }}
+        .passage-score {{ color: #71767b; font-size: 11px; }}
+        .passage-text {{ color: #e7e9ea; font-size: 12px; margin-top: 4px; line-height: 1.4; }}
+
+        .fact-item {{
+            font-size: 12px;
+            color: #71767b;
+            padding: 4px 0;
+        }}
+        .fact-predicate {{ color: #1d9bf0; }}
+
+        #chunkModal {{
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 2000;
+            backdrop-filter: blur(5px);
+        }}
+        .modal-content {{
+            position: relative;
+            margin: 5% auto;
+            padding: 24px;
+            width: 80%;
+            max-width: 700px;
+            background: linear-gradient(145deg, #1e2732, #16202a);
+            border: 1px solid #38444d;
+            border-radius: 16px;
+            color: #e7e9ea;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+        }}
+        .modal-close {{
+            position: absolute;
+            top: 16px;
+            right: 20px;
+            font-size: 24px;
+            cursor: pointer;
+            color: #71767b;
+            transition: color 0.2s;
+        }}
+        .modal-close:hover {{ color: #f4212e; }}
+        #chunkContent {{
+            white-space: pre-wrap;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            background: #0f1419;
+            padding: 16px;
+            border-radius: 8px;
+            max-height: 55vh;
+            overflow-y: auto;
+            line-height: 1.6;
+            border: 1px solid #38444d;
+        }}
+    </style>
+
+    <!-- Modal for viewing chunk content -->
+    <div id="chunkModal">
+        <div class="modal-content">
+            <span id="closeModal" class="modal-close">&times;</span>
+            <h3 style="color: #1d9bf0; margin-bottom: 16px;">📄 Document Content</h3>
+            <div id="chunkContent"></div>
+        </div>
+    </div>
+
+    <!-- Left Panel: Query Info & Legend -->
+    <div class="panel" style="top: 20px; left: 20px; width: 320px; padding: 20px; max-height: calc(100vh - 80px); overflow-y: auto;">
+        <h3 style="color: #1d9bf0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Query Analysis</h3>
+        <p style="font-size: 14px; color: #e7e9ea; background: rgba(29, 155, 240, 0.1); padding: 12px; border-radius: 8px; border-left: 3px solid #1d9bf0;">"{query}"</p>
+
+        <div style="display: flex; gap: 10px; margin: 16px 0;">
+            <div class="stat-card" style="flex: 1; text-align: center;">
+                <div class="stat-value">{entity_count}</div>
+                <div class="stat-label">Entities</div>
+            </div>
+            <div class="stat-card" style="flex: 1; text-align: center;">
+                <div class="stat-value">{passage_count}</div>
+                <div class="stat-label">Passages</div>
+            </div>
+            <div class="stat-card" style="flex: 1; text-align: center;">
+                <div class="stat-value">{len(hipporag.graph.es)}</div>
+                <div class="stat-label">Edges</div>
+            </div>
+        </div>
+
+        <p style="font-size: 12px;"><b>Matched Entities:</b></p>
+        <p style="color: #00ba7c; font-size: 13px;">{', '.join(query_entities) if query_entities else 'None found'}</p>
+
         <hr>
-        <p><b>Legend:</b></p>
-        <p><span style="color: #00ff00;">&#9679;</span> Query Entity (starting point)</p>
-        <p><span style="color: #ffff00;">&#9679;</span> High relevance entity</p>
-        <p><span style="color: #ff0000;">&#9679;</span> Very high relevance</p>
-        <p><span style="color: #6464ff;">&#9632;</span> Passage node</p>
+        <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #71767b;">Entity Relevance</p>
+        <div class="legend-item"><div class="legend-dot" style="background: #00ba7c;"></div><span>Query Entity (seed)</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background: #ff00ff;"></div><span>Top 5%</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background: #f4212e;"></div><span>Top 5-15%</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background: #ff7a00;"></div><span>Top 15-30%</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background: #ffd400;"></div><span>Top 30-50%</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background: #536471;"></div><span>Bottom 50%</span></div>
+
         <hr>
-        <p><b>Top Retrieved Passages:</b></p>
+        <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #71767b;">Passage Relevance</p>
+        <div class="legend-item"><div class="legend-box" style="background: #f91880;"></div><span>Top 10%</span></div>
+        <div class="legend-item"><div class="legend-box" style="background: #794bc4;"></div><span>Top 10-25%</span></div>
+        <div class="legend-item"><div class="legend-box" style="background: #1d9bf0;"></div><span>Top 25-50%</span></div>
+        <div class="legend-item"><div class="legend-box" style="background: #536471;"></div><span>Bottom 50%</span></div>
+        <p style="font-size: 11px; color: #71767b; margin-top: 8px;">💡 Click passage nodes to view content</p>
+    </div>
+
+    <!-- Right Panel: Retrieved Results -->
+    <div class="panel" style="top: 20px; right: 20px; width: 340px; padding: 20px; max-height: calc(100vh - 80px); overflow-y: auto;">
+        <h3 style="color: #1d9bf0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Top Retrieved Passages</h3>
     """
 
     for p in scores_data["top_passages"][:5]:
-        html_content += f"<p>{p['rank']}. (score: {p['score']:.4f}) {p['content'][:100]}...</p>"
+        html_content += f'''
+        <div class="passage-item">
+            <span class="passage-rank">#{p['rank']}</span>
+            <span class="passage-score">Score: {p['score']:.6f}</span>
+            <div class="passage-text">{p['content'][:120]}...</div>
+        </div>'''
 
     html_content += """
         <hr>
-        <p><b>Top Facts:</b></p>
+        <h3 style="color: #1d9bf0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Matched Facts</h3>
     """
 
     for f in scores_data["top_facts"][:5]:
-        html_content += f"<p>({f['subject']}, {f['predicate']}, {f['object']})</p>"
+        html_content += f'''<div class="fact-item">({f['subject']}, <span class="fact-predicate">{f['predicate']}</span>, {f['object']})</div>'''
+
+    if not scores_data["top_facts"]:
+        html_content += '<p style="color: #71767b; font-size: 12px;">No facts matched</p>'
 
     html_content += "</div>"
+
+    # JavaScript for chunk content storage and modal
+    import json
+    chunk_json = json.dumps(chunk_contents, ensure_ascii=False)
+
+    html_content += f"""
+    <script>
+    var chunkContents = {chunk_json};
+
+    // Close modal on click
+    document.getElementById('closeModal').onclick = function() {{
+        document.getElementById('chunkModal').style.display = 'none';
+    }};
+
+    // Close modal on outside click
+    document.getElementById('chunkModal').onclick = function(e) {{
+        if (e.target === this) {{
+            this.style.display = 'none';
+        }}
+    }};
+
+    // Close on Escape key
+    document.onkeydown = function(e) {{
+        if (e.key === 'Escape') {{
+            document.getElementById('chunkModal').style.display = 'none';
+        }}
+    }};
+    </script>
+    """
 
     # Save and customize HTML
     net.save_graph(output_path)
@@ -331,6 +581,38 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
         html = f.read()
 
     html = html.replace('<body>', f'<body>{html_content}')
+
+    # Add network click handler for viewing chunk content
+    network_click_handler = """
+    <script>
+    // Wait for network to be ready, then add click handler
+    function addClickHandler() {
+        if (typeof network !== 'undefined') {
+            network.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    var nodeId = params.nodes[0];
+                    // Check if this node has chunk content
+                    if (chunkContents[nodeId]) {
+                        document.getElementById('chunkContent').innerText = chunkContents[nodeId];
+                        document.getElementById('chunkModal').style.display = 'block';
+                    }
+                }
+            });
+            console.log('Click handler added');
+        } else {
+            setTimeout(addClickHandler, 100);
+        }
+    }
+    // Start checking after DOM loads
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', addClickHandler);
+    } else {
+        setTimeout(addClickHandler, 500);
+    }
+    </script>
+    """
+
+    html = html.replace('</body>', f'{network_click_handler}</body>')
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
@@ -346,7 +628,7 @@ def visualize_query(query: str = None):
     print("Loading HippoRAG...")
     hipporag = HippoRAG(
         save_dir='outputs',
-        llm_model_name='gemini/gemini-2.0-flash',
+        llm_model_name='gemini/gemini-2.5-flash',
         embedding_model_name='gemini/gemini-embedding-001'
     )
 

@@ -45,77 +45,63 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
         subprocess.check_call(['pip', 'install', 'pyvis'])
         from pyvis.network import Network
 
-    # Create Pyvis network
+    # Create Pyvis network with professional styling
     net = Network(
-        height='900px',
-        width='100%',
-        bgcolor='#222222',
-        font_color='white',
+        height='100vh',
+        width='100vw',
+        bgcolor='#0f1419',
+        font_color='#e7e9ea',
         directed=True,
         notebook=False
     )
 
-    # Physics settings for better layout
+    # Professional physics settings
     net.set_options('''
     {
         "nodes": {
             "font": {
-                "size": 14,
-                "face": "Arial"
+                "size": 12,
+                "face": "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+                "color": "#e7e9ea"
             },
-            "scaling": {
-                "min": 10,
-                "max": 30
-            }
+            "borderWidth": 2,
+            "borderWidthSelected": 4
         },
         "edges": {
-            "color": {
-                "inherit": true
-            },
-            "smooth": {
-                "type": "continuous"
-            },
-            "arrows": {
-                "to": {
-                    "enabled": true,
-                    "scaleFactor": 0.5
-                }
-            }
+            "color": {"color": "#38444d", "highlight": "#1d9bf0"},
+            "smooth": {"type": "continuous", "roundness": 0.5},
+            "arrows": {"to": {"enabled": true, "scaleFactor": 0.4}}
         },
         "physics": {
             "forceAtlas2Based": {
-                "gravitationalConstant": -50,
+                "gravitationalConstant": -80,
                 "centralGravity": 0.01,
-                "springLength": 100,
-                "springConstant": 0.08
+                "springLength": 120,
+                "springConstant": 0.08,
+                "avoidOverlap": 0.5
             },
-            "maxVelocity": 50,
             "solver": "forceAtlas2Based",
-            "timestep": 0.35,
-            "stabilization": {
-                "enabled": true,
-                "iterations": 1000
-            }
+            "stabilization": {"enabled": true, "iterations": 200, "fit": true}
         },
         "interaction": {
             "hover": true,
-            "tooltipDelay": 100,
+            "tooltipDelay": 50,
             "hideEdgesOnDrag": true,
-            "navigationButtons": true,
-            "keyboard": {
-                "enabled": true
-            }
+            "hideEdgesOnZoom": true,
+            "zoomView": true,
+            "dragView": true,
+            "keyboard": {"enabled": true}
         }
     }
     ''')
 
-    # Color scheme for different node types (based on hash_id prefix)
+    # Professional color scheme for different node types
     color_map = {
-        'entity': '#4ECDC4',      # Teal - entities/phrases
-        'chunk': '#FF6B6B',       # Coral - passages/document chunks
-        'passage': '#FF6B6B',     # Coral
-        'document': '#FF6B6B',    # Coral
-        'default': '#95E1D3'      # Light green
+        'entity': '#1d9bf0',      # Blue - entities/phrases
+        'chunk': '#f91880',       # Pink - passages/document chunks
+        'passage': '#f91880',     # Pink
+        'document': '#f91880',    # Pink
+        'default': '#00ba7c'      # Green
     }
 
     # Add nodes
@@ -190,29 +176,159 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
     os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else '.', exist_ok=True)
     net.save_graph(output_file)
 
+    # Count node types
+    has_hash_id = 'hash_id' in graph.vs.attributes()
+    entity_count = sum(1 for v in graph.vs if has_hash_id and v['hash_id'].startswith('entity'))
+    chunk_count = sum(1 for v in graph.vs if has_hash_id and v['hash_id'].startswith('chunk'))
+
     # Add custom title and legend to HTML
     with open(output_file, 'r', encoding='utf-8') as f:
         html_content = f.read()
 
-    legend_html = '''
-    <div style="position: fixed; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; color: white; font-family: Arial; z-index: 1000;">
-        <h3 style="margin: 0 0 10px 0;">HippoRAG Knowledge Graph</h3>
-        <div style="display: flex; align-items: center; margin: 5px 0;">
-            <div style="width: 20px; height: 20px; background: #4ECDC4; border-radius: 50%; margin-right: 10px;"></div>
-            <span>Entity Nodes (51)</span>
+    legend_html = f'''
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        * {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; box-sizing: border-box; }}
+        html, body {{ margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #0f1419; }}
+        .card {{ width: 100vw !important; height: 100vh !important; margin: 0 !important; padding: 0 !important; border: none !important; }}
+        #mynetwork {{ width: 100vw !important; height: 100vh !important; position: fixed !important; top: 0 !important; left: 0 !important; border: none !important; }}
+        #loadingBar {{ display: none !important; }}
+
+        .kg-panel {{
+            position: fixed;
+            background: linear-gradient(145deg, rgba(22, 32, 42, 0.98), rgba(15, 20, 25, 0.98));
+            border: 1px solid #38444d;
+            border-radius: 16px;
+            color: #e7e9ea;
+            z-index: 1000;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+        }}
+        .kg-panel h2 {{
+            margin: 0 0 4px 0;
+            font-size: 18px;
+            font-weight: 700;
+            color: #e7e9ea;
+        }}
+        .kg-panel .subtitle {{
+            font-size: 12px;
+            color: #71767b;
+            margin-bottom: 16px;
+        }}
+        .kg-panel hr {{
+            border: none;
+            border-top: 1px solid #38444d;
+            margin: 16px 0;
+        }}
+        .stat-row {{
+            display: flex;
+            gap: 12px;
+            margin: 16px 0;
+        }}
+        .stat-box {{
+            flex: 1;
+            background: rgba(29, 155, 240, 0.1);
+            border: 1px solid rgba(29, 155, 240, 0.2);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }}
+        .stat-box.entity {{ border-color: rgba(29, 155, 240, 0.3); }}
+        .stat-box.passage {{ border-color: rgba(249, 24, 128, 0.3); background: rgba(249, 24, 128, 0.1); }}
+        .stat-box.edge {{ border-color: rgba(0, 186, 124, 0.3); background: rgba(0, 186, 124, 0.1); }}
+        .stat-number {{
+            font-size: 28px;
+            font-weight: 700;
+        }}
+        .stat-box.entity .stat-number {{ color: #1d9bf0; }}
+        .stat-box.passage .stat-number {{ color: #f91880; }}
+        .stat-box.edge .stat-number {{ color: #00ba7c; }}
+        .stat-label {{
+            font-size: 10px;
+            color: #71767b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 4px;
+        }}
+        .legend-section {{
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #71767b;
+            margin-bottom: 8px;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 0;
+            font-size: 13px;
+        }}
+        .legend-dot {{
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }}
+        .legend-box {{
+            width: 16px;
+            height: 12px;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }}
+        .controls {{
+            font-size: 12px;
+            color: #71767b;
+            line-height: 1.8;
+        }}
+        .controls kbd {{
+            background: #253341;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #e7e9ea;
+        }}
+    </style>
+
+    <div class="kg-panel" style="top: 20px; left: 20px; width: 280px;">
+        <h2>🧠 HippoRAG</h2>
+        <div class="subtitle">Knowledge Graph Explorer</div>
+
+        <div class="stat-row">
+            <div class="stat-box entity">
+                <div class="stat-number">{entity_count}</div>
+                <div class="stat-label">Entities</div>
+            </div>
+            <div class="stat-box passage">
+                <div class="stat-number">{chunk_count}</div>
+                <div class="stat-label">Passages</div>
+            </div>
+            <div class="stat-box edge">
+                <div class="stat-number">{graph.ecount()}</div>
+                <div class="stat-label">Edges</div>
+            </div>
         </div>
-        <div style="display: flex; align-items: center; margin: 5px 0;">
-            <div style="width: 20px; height: 20px; background: #FF6B6B; border-radius: 50%; margin-right: 10px;"></div>
-            <span>Chunk/Passage Nodes (9)</span>
+
+        <hr>
+        <div class="legend-section">Node Types</div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #1d9bf0;"></div>
+            <span>Entity Nodes</span>
         </div>
-        <hr style="border-color: #444; margin: 10px 0;">
-        <small>
-            <b>Controls:</b><br>
-            - Scroll: Zoom<br>
-            - Drag: Pan/Move nodes<br>
-            - Click: Select node<br>
-            - Hover: View details
-        </small>
+        <div class="legend-item">
+            <div class="legend-box" style="background: #f91880;"></div>
+            <span>Passage/Chunk Nodes</span>
+        </div>
+
+        <hr>
+        <div class="legend-section">Controls</div>
+        <div class="controls">
+            <kbd>Scroll</kbd> Zoom in/out<br>
+            <kbd>Drag</kbd> Pan view / Move nodes<br>
+            <kbd>Click</kbd> Select node<br>
+            <kbd>Hover</kbd> View details
+        </div>
     </div>
     '''
 
