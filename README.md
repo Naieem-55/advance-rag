@@ -7,6 +7,9 @@ An advanced Retrieval-Augmented Generation (RAG) system built on top of HippoRAG
 - Knowledge graph-based retrieval for improved context understanding
 - Support for multiple LLM backends (OpenAI, Gemini, local models via vLLM)
 - Multiple embedding model support (NV-Embed, GritLM, Gemini, OpenAI)
+- BM25 retriever for hybrid search
+- Cross-encoder reranker for improved result ranking
+- Grounded QA with source citations
 - Knowledge graph visualization tools
 - REST API server for easy integration
 
