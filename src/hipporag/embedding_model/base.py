@@ -220,10 +220,9 @@ class BaseEmbeddingModel:
 
 
 class EmbeddingCache:
-    """A multiprocessing-safe global cache for storing embeddings."""
-    
-    _manager = multiprocessing.Manager()
-    _cache = _manager.dict()  # Shared dictionary for multiprocessing
+    """A thread-safe global cache for storing embeddings (Windows compatible)."""
+
+    _cache = {}  # Simple dictionary (no multiprocessing Manager for Windows compatibility)
     _lock = threading.Lock()  # Thread-safe lock for concurrent access
 
     @classmethod

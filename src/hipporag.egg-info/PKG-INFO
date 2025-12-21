@@ -1,3 +1,37 @@
+Metadata-Version: 2.4
+Name: hipporag
+Version: 2.0.0a4
+Summary: A powerful graph-based RAG framework that enables LLMs to identify and leverage connections within new knowledge for improved retrieval.
+Home-page: https://github.com/OSU-NLP-Group/HippoRAG
+Author: Bernal Jimenez Gutierrez
+Author-email: jimenezgutierrez.1@osu.edu
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: torch==2.5.1
+Requires-Dist: transformers==4.45.2
+Requires-Dist: vllm==0.6.6.post1
+Requires-Dist: openai==1.91.1
+Requires-Dist: litellm==1.73.1
+Requires-Dist: gritlm==1.0.2
+Requires-Dist: networkx==3.4.2
+Requires-Dist: python_igraph==0.11.8
+Requires-Dist: tiktoken==0.7.0
+Requires-Dist: pydantic==2.10.4
+Requires-Dist: tenacity==8.5.0
+Requires-Dist: einops
+Requires-Dist: tqdm
+Requires-Dist: boto3
+Dynamic: author
+Dynamic: author-email
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 <h1 align="center">HippoRAG 2: From RAG to Memory</h1>
 <p align="center">
     <img src="https://github.com/OSU-NLP-Group/HippoRAG/raw/main/images/hippo_brain.png" width="55%" style="max-width: 300px;">
@@ -446,9 +480,3 @@ If you find this work useful, please consider citing our papers:
 - [ ] Add support for vector database integration
 
 Please feel free to open an issue or PR if you have any questions or suggestions.
-
-## Special Thanks
-
-This project is based on the original HippoRAG framework. Special thanks to the OSU NLP Group for their excellent work:
-
-- [HippoRAG - OSU-NLP-Group](https://github.com/OSU-NLP-Group/HippoRAG)

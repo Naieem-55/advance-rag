@@ -21,8 +21,9 @@ from .llm import _get_llm_class, BaseLLM
 from .embedding_model import _get_embedding_model_class, BaseEmbeddingModel
 from .embedding_store import EmbeddingStore
 from .information_extraction import OpenIE
-from .information_extraction.openie_vllm_offline import VLLMOfflineOpenIE
-from .information_extraction.openie_transformers_offline import TransformersOfflineOpenIE
+# Lazy imports for Windows compatibility (vllm not supported on Windows)
+# from .information_extraction.openie_vllm_offline import VLLMOfflineOpenIE
+# from .information_extraction.openie_transformers_offline import TransformersOfflineOpenIE
 from .evaluation.retrieval_eval import RetrievalRecall
 from .evaluation.qa_eval import QAExactMatch, QAF1Score
 from .prompts.linking import get_query_instruction
@@ -127,8 +128,12 @@ class HippoRAG:
         if self.global_config.openie_mode == 'online':
             self.openie = OpenIE(llm_model=self.llm_model)
         elif self.global_config.openie_mode == 'offline':
+            # Lazy import for Windows compatibility
+            from .information_extraction.openie_vllm_offline import VLLMOfflineOpenIE
             self.openie = VLLMOfflineOpenIE(self.global_config)
         elif self.global_config.openie_mode ==  'Transformers-offline':
+            # Lazy import for Windows compatibility
+            from .information_extraction.openie_transformers_offline import TransformersOfflineOpenIE
             self.openie = TransformersOfflineOpenIE(self.global_config)
 
         self.graph = self.initialize_graph()
@@ -1596,11 +1601,15 @@ class HippoRAG:
 
         if damping is None: damping = 0.5 # for potential compatibility
         reset_prob = np.where(np.isnan(reset_prob) | (reset_prob < 0), 0, reset_prob)
+
+        # Check if edge weights exist, use None if not
+        edge_weights = 'weight' if 'weight' in self.graph.es.attributes() else None
+
         pagerank_scores = self.graph.personalized_pagerank(
             vertices=range(len(self.node_name_to_vertex_idx)),
             damping=damping,
             directed=False,
-            weights='weight',
+            weights=edge_weights,
             reset=reset_prob,
             implementation='prpack'
         )
