@@ -7,7 +7,22 @@ CRITICAL: Extract entities in the SAME LANGUAGE as the input text.
 - Do NOT translate entities to another language
 - Preserve the original script and spelling exactly as written
 
-Extract: Person names, Organizations, Locations, Dates, Events, Products, etc.
+ENTITY TYPES TO EXTRACT:
+1. Person names (ব্যক্তির নাম)
+2. Organizations - companies, institutions, coaching centers, universities, banks, hospitals
+   Examples: উদ্ভাস, উন্মেষ, ঢাকা বিশ্ববিদ্যালয়, সোনালী ব্যাংক, BUET, KUET
+3. Locations - cities, districts, countries, addresses
+   Examples: ঢাকা, মিরপুর, চট্টগ্রাম, বাংলাদেশ
+4. Dates and Times (তারিখ)
+5. Numbers and Quantities (সংখ্যা) - e.g., ১০৮ টি শাখা, ৬৪ জেলা
+6. Products, Services, Events
+7. Educational terms - বিভাগ, অনুষদ, শাখা, ক্যাম্পাস
+
+IMPORTANT for Bangla:
+- Extract compound names: "উদ্ভাস-উন্মেষ" as single entity
+- Extract branch/location names: "মিরপুর শাখা", "পল্লবী শাখা"
+- Extract institutional divisions: "ঢাকা বিভাগ", "চট্টগ্রাম বিভাগ"
+
 Respond with a JSON list of entities.
 """
 
@@ -22,10 +37,24 @@ one_shot_ner_output = """{"named_entities":
 }
 """
 
+# Bangla example for organization extraction
+bangla_ner_paragraph = """দেশব্যাপী ৬৪ জেলায় উদ্ভাস-উন্মেষ এর ১০৮ টি শাখা রয়েছে।
+
+ঢাকা বিভাগ
+মিরপুর শাখার ফোন নং ০১৭১৩২৩৬৭০৫। ঠিকানা: ন্যাশনাল ব্যাংকের উপরে, মিরপুর-২।
+পল্লবী শাখার ফোন নং ০১৭১৩২৩৬৮১৮।"""
+
+bangla_ner_output = """{"named_entities":
+    ["৬৪ জেলা", "উদ্ভাস-উন্মেষ", "১০৮ টি শাখা", "ঢাকা বিভাগ", "মিরপুর শাখা", "০১৭১৩২৩৬৭০৫", "ন্যাশনাল ব্যাংক", "মিরপুর-২", "পল্লবী শাখা", "০১৭১৩২৩৬৮১৮"]
+}
+"""
+
 
 prompt_template = [
     {"role": "system", "content": ner_system},
     {"role": "user", "content": one_shot_ner_paragraph},
     {"role": "assistant", "content": one_shot_ner_output},
+    {"role": "user", "content": bangla_ner_paragraph},
+    {"role": "assistant", "content": bangla_ner_output},
     {"role": "user", "content": "${passage}"}
 ]

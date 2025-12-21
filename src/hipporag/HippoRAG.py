@@ -169,7 +169,8 @@ class HippoRAG:
         self.hybrid_alpha = 0.7  # Weight for dense scores (0.7 dense, 0.3 BM25)
 
         # Cross-encoder reranker for precision
-        self.use_reranker = True  # Enable reranking by default
+        # Disabled by default - PPR provides good ranking for multilingual content
+        self.use_reranker = False
         self.reranker = get_reranker(reranker_type="gemini", model_name=self.global_config.llm_name)
 
         # Answer verification to prevent hallucination
@@ -177,7 +178,8 @@ class HippoRAG:
         self.verification_confidence_threshold = 0.5
 
         # Query expansion for better recall
-        self.use_query_expansion = True  # Enable query expansion by default
+        # Disabled by default - can distort multilingual queries
+        self.use_query_expansion = False
 
         self.ready_to_retrieve = False
 

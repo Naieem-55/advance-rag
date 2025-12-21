@@ -68,19 +68,35 @@ class DSPyFilter:
         for k, value in sections:
             if k == "fact_after_filter":
                 try:
-                    # fields[k] = parse_value(v, signature.output_fields[k].annotation) if _parse_values else v
+                    # Try to fix truncated JSON by completing array brackets
+                    fixed_value = value
+                    if fixed_value.count('[') > fixed_value.count(']'):
+                        # Add missing closing brackets
+                        missing = fixed_value.count('[') - fixed_value.count(']')
+                        fixed_value = fixed_value.rstrip(',') + ']' * missing
+                    if fixed_value.count('{') > fixed_value.count('}'):
+                        fixed_value = fixed_value + '}'
+
                     try:
-                        parsed_value = json.loads(value)
+                        parsed_value = json.loads(fixed_value)
                     except json.JSONDecodeError:
                         try:
-                            parsed_value = ast.literal_eval(value)
+                            parsed_value = ast.literal_eval(fixed_value)
                         except (ValueError, SyntaxError):
                             parsed_value = value
-                    parsed = TypeAdapter(Fact).validate_python(parsed_value).fact
+
+                    if isinstance(parsed_value, dict):
+                        parsed = TypeAdapter(Fact).validate_python(parsed_value).fact
+                    elif isinstance(parsed_value, str):
+                        # Try parsing as dict if it's a string
+                        try:
+                            parsed_value = json.loads(parsed_value)
+                            parsed = TypeAdapter(Fact).validate_python(parsed_value).fact
+                        except:
+                            pass
                 except Exception as e:
-                    print(
-                        f"Error parsing field {k}: {e}.\n\n\t\tOn attempting to parse the value\n```\n{value}\n```"
-                    )
+                    # Silently fail - will use candidate facts as fallback
+                    pass
 
         return parsed
 
@@ -90,7 +106,8 @@ class DSPyFilter:
         messages.append({"role": "user", "content": self.one_input_template.format(question=question, fact_before_filter=fact_before_filter)})
         # call openai
 
-        self.default_gen_kwargs['max_completion_tokens'] = 512
+        # Increased for Unicode/multilingual text which may need more tokens
+        self.default_gen_kwargs['max_completion_tokens'] = 1024
 
         response = self.llm_infer_fn(
             messages=messages,
@@ -118,6 +135,14 @@ class DSPyFilter:
         except Exception as e:
             print('exception', e)
             generated_facts = []
+
+        # FALLBACK: If parsing failed, use original candidate facts
+        # This ensures we don't lose all facts due to parsing issues with multilingual text
+        if len(generated_facts) == 0 and len(candidate_items) > 0:
+            print(f'Reranker parse returned 0 facts, using {len(candidate_items)} candidate facts as fallback')
+            # Return original candidates in their original order
+            return candidate_indices[:len_after_rerank], candidate_items[:len_after_rerank], {'confidence': None, 'fallback': True}
+
         result_indices = []
         for generated_fact in generated_facts:
             closest_matched_fact = difflib.get_close_matches(str(generated_fact), [str(i) for i in candidate_items], n=1, cutoff=0.0)[0]
