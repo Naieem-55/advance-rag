@@ -11,6 +11,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.txt
+documents/
 # Ignore nohup_out directory
 nohup_out/
 # Ignore outputs directory
