@@ -82,6 +82,46 @@ quote_re_output = """{"triples": [
 }
 """
 
+# Date/Time/Event relationships example
+date_event_paragraph = """মিন্টু চলে গেল জুন মাসে, জুনের ২৩ তারিখে। জুলাইয়ের পয়লা তারিখে সে বাড়ি শিফট করল।
+রবীন্দ্রনাথ ঠাকুর ১৮৬১ সালের ৭ই মে জন্মগ্রহণ করেন এবং ১৯৪১ সালের ৭ই আগস্ট মৃত্যুবরণ করেন।
+বঙ্গবন্ধু শেখ মুজিবুর রহমান ১৯৭১ সালের ৭ই মার্চ ঐতিহাসিক ভাষণ দেন।
+"""
+
+date_event_ner_output = """{"named_entities": ["মিন্টু", "জুনের ২৩ তারিখে", "জুলাইয়ের পয়লা তারিখে", "রবীন্দ্রনাথ ঠাকুর", "১৮৬১ সালের ৭ই মে", "১৯৪১ সালের ৭ই আগস্ট", "বঙ্গবন্ধু শেখ মুজিবুর রহমান", "৭ই মার্চ ১৯৭১"]}"""
+
+date_event_re_input = ner_conditioned_re_frame.format(passage=date_event_paragraph, named_entity_json=date_event_ner_output)
+
+date_event_re_output = """{"triples": [
+            ["মিন্টু", "left on", "জুনের ২৩ তারিখে"],
+            ["মিন্টু", "left in", "জুন মাসে"],
+            ["মিন্টু", "shifted house on", "জুলাইয়ের পয়লা তারিখে"],
+            ["রবীন্দ্রনাথ ঠাকুর", "was born on", "১৮৬১ সালের ৭ই মে"],
+            ["রবীন্দ্রনাথ ঠাকুর", "died on", "১৯৪১ সালের ৭ই আগস্ট"],
+            ["বঙ্গবন্ধু শেখ মুজিবুর রহমান", "gave historic speech on", "৭ই মার্চ ১৯৭১"]
+    ]
+}
+"""
+
+# Action/Event relationships example
+action_event_paragraph = """নুরুল হুদা সকাল ১০টায় কলেজে গেলেন। মিলিটারি তাকে ধরে নিয়ে গেল ক্যান্টনমেন্টে।
+প্রিন্সিপাল সাহেব তাকে ডেকে পাঠালেন। তিনি অফিসে ঢুকলেন ভয়ে ভয়ে।
+"""
+
+action_event_ner_output = """{"named_entities": ["নুরুল হুদা", "সকাল ১০টা", "কলেজ", "মিলিটারি", "ক্যান্টনমেন্ট", "প্রিন্সিপাল সাহেব"]}"""
+
+action_event_re_input = ner_conditioned_re_frame.format(passage=action_event_paragraph, named_entity_json=action_event_ner_output)
+
+action_event_re_output = """{"triples": [
+            ["নুরুল হুদা", "went to", "কলেজ"],
+            ["নুরুল হুদা", "arrived at", "সকাল ১০টা"],
+            ["মিলিটারি", "captured", "নুরুল হুদা"],
+            ["মিলিটারি", "took to", "ক্যান্টনমেন্ট"],
+            ["প্রিন্সিপাল সাহেব", "summoned", "নুরুল হুদা"]
+    ]
+}
+"""
+
 
 prompt_template = [
     {"role": "system", "content": ner_conditioned_re_system},
@@ -91,5 +131,9 @@ prompt_template = [
     {"role": "assistant", "content": bangla_re_output},
     {"role": "user", "content": quote_re_input},
     {"role": "assistant", "content": quote_re_output},
+    {"role": "user", "content": date_event_re_input},
+    {"role": "assistant", "content": date_event_re_output},
+    {"role": "user", "content": action_event_re_input},
+    {"role": "assistant", "content": action_event_re_output},
     {"role": "user", "content": convert_format_to_template(original_string=ner_conditioned_re_frame, placeholder_mapping=None, static_values=None)}
 ]

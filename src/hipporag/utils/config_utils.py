@@ -189,10 +189,41 @@ class BaseConfig:
         metadata={"help": "For answering a single question, the max steps that we use to interleave retrieval and reasoning."}
     )
     qa_top_k: int = field(
-        default=5,
+        default=10,
         metadata={"help": "Feeding top k documents to the QA model for reading."}
     )
-    
+
+    # Hybrid scoring configuration
+    hybrid_mode: str = field(
+        default="adaptive",
+        metadata={"help": "Hybrid scoring mode: 'adaptive', 'fixed', 'ppr_only', 'dpr_only'"}
+    )
+
+    hybrid_alpha_high: float = field(
+        default=0.7,
+        metadata={"help": "PPR weight when fact confidence is high (>0.8)"}
+    )
+
+    hybrid_alpha_medium: float = field(
+        default=0.5,
+        metadata={"help": "PPR weight when fact confidence is medium (0.5-0.8)"}
+    )
+
+    hybrid_alpha_low: float = field(
+        default=0.3,
+        metadata={"help": "PPR weight when fact confidence is low (<0.5)"}
+    )
+
+    fact_confidence_high: float = field(
+        default=0.8,
+        metadata={"help": "Threshold for high fact confidence"}
+    )
+
+    fact_confidence_low: float = field(
+        default=0.5,
+        metadata={"help": "Threshold for low fact confidence"}
+    )
+
     # Save dir (highest level directory)
     save_dir: str = field(
         default=None,

@@ -386,6 +386,88 @@ class HippoRAG:
 
         self.ready_to_retrieve = False
 
+    def compute_adaptive_hybrid_scores(
+        self,
+        ppr_doc_ids: np.ndarray,
+        ppr_doc_scores: np.ndarray,
+        dpr_doc_ids: np.ndarray,
+        dpr_doc_scores: np.ndarray,
+        fact_confidence: float
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute hybrid scores combining PPR and DPR based on fact matching confidence.
+
+        When fact_confidence is HIGH: Trust PPR more (knowledge graph is relevant)
+        When fact_confidence is LOW: Trust DPR more (fall back to semantic search)
+
+        Args:
+            ppr_doc_ids: Document IDs sorted by PPR score
+            ppr_doc_scores: PPR scores for each document
+            dpr_doc_ids: Document IDs sorted by DPR score
+            dpr_doc_scores: DPR scores for each document
+            fact_confidence: Max score of matched facts (0-1)
+
+        Returns:
+            Tuple of (sorted_doc_ids, sorted_hybrid_scores)
+        """
+        config = self.global_config
+        mode = config.hybrid_mode
+
+        # Handle special modes
+        if mode == "ppr_only":
+            return ppr_doc_ids, ppr_doc_scores
+        elif mode == "dpr_only":
+            return dpr_doc_ids, dpr_doc_scores
+
+        # Determine alpha based on fact confidence
+        if mode == "adaptive":
+            if fact_confidence >= config.fact_confidence_high:
+                alpha = config.hybrid_alpha_high  # Trust PPR more
+            elif fact_confidence >= config.fact_confidence_low:
+                alpha = config.hybrid_alpha_medium  # Balanced
+            else:
+                alpha = config.hybrid_alpha_low  # Trust DPR more
+        else:  # fixed mode
+            alpha = config.hybrid_alpha_medium
+
+        # Create score arrays for all documents
+        num_docs = len(self.passage_node_keys)
+
+        # Normalize scores to 0-1
+        ppr_normalized = np.zeros(num_docs)
+        dpr_normalized = np.zeros(num_docs)
+
+        # PPR scores (already sorted, need to map back to doc indices)
+        if len(ppr_doc_scores) > 0:
+            ppr_min, ppr_max = np.min(ppr_doc_scores), np.max(ppr_doc_scores)
+            if ppr_max > ppr_min:
+                for i, doc_id in enumerate(ppr_doc_ids):
+                    ppr_normalized[doc_id] = (ppr_doc_scores[i] - ppr_min) / (ppr_max - ppr_min)
+            else:
+                for i, doc_id in enumerate(ppr_doc_ids):
+                    ppr_normalized[doc_id] = 1.0
+
+        # DPR scores
+        if len(dpr_doc_scores) > 0:
+            dpr_min, dpr_max = np.min(dpr_doc_scores), np.max(dpr_doc_scores)
+            if dpr_max > dpr_min:
+                for i, doc_id in enumerate(dpr_doc_ids):
+                    dpr_normalized[doc_id] = (dpr_doc_scores[i] - dpr_min) / (dpr_max - dpr_min)
+            else:
+                for i, doc_id in enumerate(dpr_doc_ids):
+                    dpr_normalized[doc_id] = 1.0
+
+        # Compute hybrid scores
+        hybrid_scores = alpha * ppr_normalized + (1 - alpha) * dpr_normalized
+
+        # Sort by hybrid scores
+        sorted_indices = np.argsort(hybrid_scores)[::-1]
+        sorted_scores = hybrid_scores[sorted_indices]
+
+        logger.debug(f"Hybrid scoring: fact_confidence={fact_confidence:.3f}, alpha={alpha:.2f} (PPR weight)")
+
+        return sorted_indices, sorted_scores
+
     def retrieve(self,
                  queries: List[str],
                  num_to_retrieve: int = None,
@@ -447,16 +529,34 @@ class HippoRAG:
 
             self.rerank_time += rerank_end - rerank_start
 
+            # Always get DPR results for hybrid scoring
+            dpr_doc_ids, dpr_doc_scores = self.dense_passage_retrieval(query)
+
+            # Calculate fact confidence (max score of matched facts)
+            if len(top_k_fact_indices) > 0 and len(query_fact_scores) > 0:
+                fact_confidence = float(np.max([query_fact_scores[i] for i in top_k_fact_indices]))
+            else:
+                fact_confidence = 0.0
+
             if len(top_k_facts) == 0:
                 logger.info('No facts found after reranking, return DPR results')
-                sorted_doc_ids, sorted_doc_scores = self.dense_passage_retrieval(query)
+                sorted_doc_ids, sorted_doc_scores = dpr_doc_ids, dpr_doc_scores
             else:
-                sorted_doc_ids, sorted_doc_scores = self.graph_search_with_fact_entities(query=query,
+                ppr_doc_ids, ppr_doc_scores = self.graph_search_with_fact_entities(query=query,
                                                                                          link_top_k=self.global_config.linking_top_k,
                                                                                          query_fact_scores=query_fact_scores,
                                                                                          top_k_facts=top_k_facts,
                                                                                          top_k_fact_indices=top_k_fact_indices,
                                                                                          passage_node_weight=self.global_config.passage_node_weight)
+
+                # Apply adaptive hybrid scoring
+                sorted_doc_ids, sorted_doc_scores = self.compute_adaptive_hybrid_scores(
+                    ppr_doc_ids=ppr_doc_ids,
+                    ppr_doc_scores=ppr_doc_scores,
+                    dpr_doc_ids=dpr_doc_ids,
+                    dpr_doc_scores=dpr_doc_scores,
+                    fact_confidence=fact_confidence
+                )
 
             # Get candidate documents
             candidate_count = min(num_to_retrieve * 2, len(sorted_doc_ids))  # Get more candidates for reranking
