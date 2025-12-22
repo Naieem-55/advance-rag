@@ -4,7 +4,8 @@
       "Bash(git remote:*)",
       "Bash(git add:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nImprove multilingual support and API response handling\n\n- Add not-found detection for English and Bangla responses\n- Filter out low-score references from API response\n- Add Bangla example to grounded QA prompt\n- Enforce same-language response matching\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(python:*)"
     ]
   }
 }

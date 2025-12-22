@@ -189,7 +189,7 @@ class BaseConfig:
         metadata={"help": "For answering a single question, the max steps that we use to interleave retrieval and reasoning."}
     )
     qa_top_k: int = field(
-        default=10,
+        default=15,
         metadata={"help": "Feeding top k documents to the QA model for reading."}
     )
 

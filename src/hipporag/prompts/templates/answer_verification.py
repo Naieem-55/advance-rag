@@ -18,10 +18,10 @@ Respond in JSON format:
 """
 
 one_shot_input = """Passages:
-Wikipedia Title: University of Southampton
+Passage: University of Southampton
 The University of Southampton was founded in 1862 and received its Royal Charter in 1952. It has over 22,000 students.
 
-Wikipedia Title: Neville A. Stanton
+Passage: Neville A. Stanton
 Neville A. Stanton is a British Professor of Human Factors and Ergonomics at the University of Southampton.
 
 Question: When was Neville A. Stanton's employer founded?
@@ -37,7 +37,7 @@ one_shot_output = """{
 
 # Example of unverified answer
 unverified_input = """Passages:
-Wikipedia Title: The Last Horse
+Passage: The Last Horse
 The Last Horse (Spanish: El último caballo) is a 1950 Spanish comedy film directed by Edgar Neville.
 
 Question: When was The Last Horse released?

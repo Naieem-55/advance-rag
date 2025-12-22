@@ -248,49 +248,59 @@ async def ask_question(request: QuestionRequest):
         # Add language instruction
         query_with_instruction = f"{request.question}\n\n({request.language_instruction})"
 
-        # Get answer from HippoRAG
-        # Returns: Tuple[List[QuerySolution], List[str], List[Dict]]
-        query_solutions, response_messages, metadata_list = hipporag.rag_qa(queries=[query_with_instruction])
+        # Retry logic for empty responses
+        max_retries = 3
+        answer = None
+        query_solution = None
 
-        if query_solutions and len(query_solutions) > 0:
-            # QuerySolution has: question, docs, doc_scores, answer
-            query_solution = query_solutions[0]
+        for attempt in range(max_retries):
+            # Get answer from HippoRAG
+            # Returns: Tuple[List[QuerySolution], List[str], List[Dict]]
+            query_solutions, response_messages, metadata_list = hipporag.rag_qa(queries=[query_with_instruction])
 
-            answer = query_solution.answer if query_solution.answer else "No answer found"
+            if query_solutions and len(query_solutions) > 0:
+                query_solution = query_solutions[0]
+                answer = query_solution.answer if query_solution.answer else "No answer found"
 
-            # Check if answer indicates "not found" - return empty references
-            not_found_indicators = [
-                "not found", "information not found", "no information",
-                "পাওয়া যায়নি", "তথ্য পাওয়া যায়নি"  # Bangla equivalents
-            ]
-            is_not_found = any(indicator in answer.lower() for indicator in not_found_indicators)
+                # Check if we got a valid response (not empty/error)
+                if answer and "No response content available" not in answer:
+                    break
+                else:
+                    print(f"Attempt {attempt + 1}: Empty response, retrying...")
 
-            # Extract references from docs and doc_scores
-            references = []
-            if not is_not_found:
-                docs = query_solution.docs if query_solution.docs else []
-                scores = query_solution.doc_scores if query_solution.doc_scores is not None else []
+            if attempt == max_retries - 1:
+                print(f"All {max_retries} attempts failed, using last response")
 
-                for i, doc in enumerate(docs[:5]):  # Top 5 references
-                    score = float(scores[i]) if i < len(scores) else 0.0
-                    # Only include references with meaningful scores (> 0.01)
-                    if score > 0.01:
-                        references.append(Reference(
-                            content=doc[:500] + "..." if len(doc) > 500 else doc,
-                            score=score
-                        ))
+        if not answer:
+            answer = "No answer found"
 
-            return AnswerResponse(
-                question=request.question,
-                answer=answer,
-                references=references
-            )
-        else:
-            return AnswerResponse(
-                question=request.question,
-                answer="No answer found",
-                references=[]
-            )
+        # Check if answer indicates "not found" - return empty references
+        not_found_indicators = [
+            "not found", "information not found", "no information",
+            "পাওয়া যায়নি", "তথ্য পাওয়া যায়নি", "no response content"  # Bangla equivalents
+        ]
+        is_not_found = any(indicator in answer.lower() for indicator in not_found_indicators)
+
+        # Extract references from docs and doc_scores
+        references = []
+        if query_solution and not is_not_found:
+            docs = query_solution.docs if query_solution.docs else []
+            scores = query_solution.doc_scores if query_solution.doc_scores is not None else []
+
+            for i, doc in enumerate(docs[:5]):  # Top 5 references
+                score = float(scores[i]) if i < len(scores) else 0.0
+                # Only include references with meaningful scores (> 0.01)
+                if score > 0.01:
+                    references.append(Reference(
+                        content=doc[:500] + "..." if len(doc) > 500 else doc,
+                        score=score
+                    ))
+
+        return AnswerResponse(
+            question=request.question,
+            answer=answer,
+            references=references
+        )
 
     except Exception as e:
         import traceback

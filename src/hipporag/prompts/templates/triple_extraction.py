@@ -4,16 +4,27 @@ from ...utils.llm_utils import convert_format_to_template
 ner_conditioned_re_system = """Your task is to construct an RDF (Resource Description Framework) graph from the given passages and named entity lists.
 Respond with a JSON list of triples, with each triple representing a relationship in the RDF graph.
 
+EXTRACT ALL RELATIONSHIP TYPES including but not limited to:
+- Actions: who did what (went, said, bought, killed, married, etc.)
+- Temporal: when something happened (dates, times, durations)
+- Spatial: where something is located or happened
+- Causal: why something happened, reasons, causes
+- Legal: lawsuits, accusations, threats, complaints (নালিশ, মামলা, অভিযোগ)
+- Emotional: feelings, reactions, attitudes
+- Possession: who owns/has what
+- Social: relationships between people (family, friends, enemies)
+- Descriptive: properties and attributes of entities
+
 Pay attention to the following requirements:
 - Each triple should contain at least one, but preferably two, of the named entities in the list for each passage.
 - Clearly resolve pronouns to their specific names to maintain clarity.
-- For tabular data (like branch lists, contact info), extract relationships like "has branch at", "phone number is", "address is".
+- Extract ALL meaningful relationships, not just the obvious ones.
+- For statements like "X বলিয়া Y করিল" extract both the statement and the action.
 
 CRITICAL - LANGUAGE PRESERVATION:
 - Keep ALL entities in the SAME LANGUAGE as the source text
 - If the passage is in Bangla, use Bangla entities (e.g., "অনুপম" not "Anupam")
-- If the passage is in Hindi, use Hindi entities
-- Do NOT translate entities or predicates to English
+- Do NOT translate entities to English
 - Preserve the original script and spelling exactly
 - Predicates can be in English for consistency, but entities MUST match the source language
 
@@ -122,6 +133,27 @@ action_event_re_output = """{"triples": [
 }
 """
 
+# Legal/Lawsuit/Threat relationships example
+legal_paragraph = """বিবাহের চুক্তিভঙ্গ ও মানহানির দাবিতে নালিশ করিব বলিয়া মামা অত্যন্ত গোল করিয়া বেড়াইতে লাগিলেন।
+হিতৈষীরা বুঝাইয়া দিল, তাহা হইলে তামাশার যেটুকু বাকি আছে তাহা পুরা হইয়া যাইবে।
+বাবা তাহাকে মিথ্যা অপবাদ দিয়াছেন বলিয়া তিনি আদালতে মামলা করিলেন।
+"""
+
+legal_ner_output = """{"named_entities": ["মামা", "বিবাহের চুক্তিভঙ্গ", "মানহানি", "হিতৈষীরা", "বাবা", "আদালত"]}"""
+
+legal_re_input = ner_conditioned_re_frame.format(passage=legal_paragraph, named_entity_json=legal_ner_output)
+
+legal_re_output = """{"triples": [
+            ["মামা", "threatened to sue for", "বিবাহের চুক্তিভঙ্গ"],
+            ["মামা", "threatened to sue for", "মানহানি"],
+            ["মামা", "was making a fuss about", "নালিশ করা"],
+            ["হিতৈষীরা", "advised against", "নালিশ করা"],
+            ["বাবা", "was accused of", "মিথ্যা অপবাদ"],
+            ["তিনি", "filed lawsuit in", "আদালত"]
+    ]
+}
+"""
+
 
 prompt_template = [
     {"role": "system", "content": ner_conditioned_re_system},
@@ -135,5 +167,7 @@ prompt_template = [
     {"role": "assistant", "content": date_event_re_output},
     {"role": "user", "content": action_event_re_input},
     {"role": "assistant", "content": action_event_re_output},
+    {"role": "user", "content": legal_re_input},
+    {"role": "assistant", "content": legal_re_output},
     {"role": "user", "content": convert_format_to_template(original_string=ner_conditioned_re_frame, placeholder_mapping=None, static_values=None)}
 ]

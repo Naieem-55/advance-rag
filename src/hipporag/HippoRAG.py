@@ -932,7 +932,7 @@ class HippoRAG:
 
             prompt_user = ''
             for passage in retrieved_passages:
-                prompt_user += f'Wikipedia Title: {passage}\n\n'
+                prompt_user += f'Passage: {passage}\n\n'
             prompt_user += 'Question: ' + query_solution.question + '\nThought: '
 
             if self.prompt_template_manager.is_template_name_valid(name=f'rag_qa_{self.global_config.dataset}'):

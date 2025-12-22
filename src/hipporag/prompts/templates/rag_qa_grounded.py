@@ -18,10 +18,10 @@ Your response format:
 - End with "Answer:" followed by the concise answer
 """
 
-one_shot_input = """Wikipedia Title: University of Southampton
+one_shot_input = """Passage: University of Southampton
 The University of Southampton, which was founded in 1862 and received its Royal Charter as a university in 1952, has over 22,000 students.
 
-Wikipedia Title: Neville A. Stanton
+Passage: Neville A. Stanton
 Neville A. Stanton is a British Professor of Human Factors and Ergonomics at the University of Southampton.
 
 Question: When was Neville A. Stanton's employer founded?
@@ -31,7 +31,7 @@ one_shot_output = """The passage states that Neville A. Stanton is a Professor a
 Answer: 1862"""
 
 # Example of not found
-not_found_input = """Wikipedia Title: The Last Horse
+not_found_input = """Passage: The Last Horse
 The Last Horse (Spanish:El último caballo) is a 1950 Spanish comedy film directed by Edgar Neville.
 
 Question: Who directed Finding Nemo?
@@ -41,7 +41,7 @@ not_found_output = """I searched through the provided passages but could not fin
 Answer: Information not found in the provided documents."""
 
 # Bangla example - to demonstrate responding in same language as query
-bangla_input = """Wikipedia Title: অপরিচিতা
+bangla_input = """Passage: অপরিচিতা
 অনুপমের বয়স ছিল তেইশ বছর। সে কলকাতার একটি বড় অফিসে কাজ করত।
 
 Question: অনুপমের বয়স কত ছিল?

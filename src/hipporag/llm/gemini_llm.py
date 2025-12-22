@@ -169,10 +169,15 @@ class GeminiLLM(BaseLLM):
             params.update(kwargs)
         params["messages"] = messages
 
-        logger.debug(f"Calling Gemini API with model: {params['model']}")
+        # DEBUG: Print params being sent
+        print(f"[DEBUG] Gemini params: model={params.get('model')}, max_tokens={params.get('max_tokens')}, temp={params.get('temperature')}")
+        print(f"[DEBUG] Number of messages: {len(messages)}")
 
         try:
             response = litellm.completion(**params)
+
+            # DEBUG: Print raw response
+            print(f"[DEBUG] Raw response content: {response.choices[0].message.content}")
 
             # Debug: Log the full response structure
             logger.debug(f"Full Gemini response: {response}")
@@ -215,10 +220,30 @@ class GeminiLLM(BaseLLM):
                 elif hasattr(message, 'tool_calls') and message.tool_calls:
                     response_message = str(message.tool_calls)
                 else:
-                    # Print all available attributes for debugging
-                    logger.warning(f"Content is None. Message attributes: {dir(message)}")
-                    logger.warning(f"Message model_dump: {message.model_dump() if hasattr(message, 'model_dump') else 'N/A'}")
-                    response_message = "No response content available"
+                    # Last resort: try to extract from model_dump
+                    if hasattr(message, 'model_dump'):
+                        dump = message.model_dump()
+                        logger.warning(f"Content is None. Trying model_dump: {dump}")
+                        # Search for any text content in the dump
+                        if isinstance(dump, dict):
+                            # Check for content in various places
+                            for key in ['content', 'text', 'parts']:
+                                if key in dump and dump[key]:
+                                    val = dump[key]
+                                    if isinstance(val, str):
+                                        response_message = val
+                                        break
+                                    elif isinstance(val, list):
+                                        texts = [p.get('text', '') if isinstance(p, dict) else str(p) for p in val]
+                                        response_message = ' '.join(t for t in texts if t)
+                                        break
+                            else:
+                                response_message = "No response content available"
+                        else:
+                            response_message = "No response content available"
+                    else:
+                        logger.warning(f"Content is None. Message attributes: {dir(message)}")
+                        response_message = "No response content available"
             elif isinstance(response_content, list):
                 # If content is a list (e.g., multi-part response), join text parts
                 text_parts = []
@@ -235,10 +260,19 @@ class GeminiLLM(BaseLLM):
             else:
                 response_message = str(response_content)
 
+            # Check for blocked/empty responses
+            finish_reason = response.choices[0].finish_reason
+            if response_message == "No response content available" or not response_message.strip():
+                logger.warning(f"Empty response. Finish reason: {finish_reason}")
+                # Check if blocked by safety
+                if hasattr(response.choices[0], 'finish_reason') and finish_reason in ['SAFETY', 'RECITATION', 'OTHER']:
+                    logger.warning(f"Response blocked by Gemini. Reason: {finish_reason}")
+                    response_message = "তথ্য পাওয়া যায়নি।"  # Default Bangla response
+
             metadata = {
                 "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
                 "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-                "finish_reason": response.choices[0].finish_reason,
+                "finish_reason": finish_reason,
             }
 
             return response_message, metadata
