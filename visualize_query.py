@@ -279,6 +279,18 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
             else:
                 return "#ff00ff"  # Magenta - top 5%
 
+    # Import for hash ID computation
+    from hipporag.utils.misc_utils import compute_mdhash_id
+
+    # Pre-compute query entity keys and their connected chunks
+    query_entity_keys = set()
+    connected_chunk_keys = set()
+    for qe in query_entities:
+        qe_key = compute_mdhash_id(content=qe, prefix="entity-")
+        query_entity_keys.add(qe_key)
+        chunk_ids = hipporag.ent_node_to_chunk_ids.get(qe_key, set())
+        connected_chunk_keys.update(chunk_ids)
+
     # Add nodes
     for v in hipporag.graph.vs:
         node_name = v['name']
@@ -291,6 +303,9 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
         is_entity = hash_id.startswith('entity')
         is_passage = hash_id.startswith('chunk')
         is_query_entity = node_name.lower() in query_entities
+
+        # Check if this chunk is connected to a query entity
+        is_connected_to_query = hash_id in connected_chunk_keys
 
         # Size based on percentile (for better visual distribution)
         percentile = get_percentile(ppr_score)
@@ -316,13 +331,30 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
         if is_query_entity:
             base_size = 30  # Larger for query entities
 
+        if is_connected_to_query:
+            base_size = 35  # Even larger for connected chunks
+
         size = base_size + size_factor * 30
-        color = get_color(ppr_score, is_entity, is_query_entity, is_passage)
+
+        # Special color for connected chunks
+        if is_connected_to_query:
+            color = "#00ba7c"  # Green for query-connected chunks
+            border_color = "#00ff9d"
+            border_width = 4
+        elif is_query_entity:
+            color = get_color(ppr_score, is_entity, is_query_entity, is_passage)
+            border_color = "#00ba7c"
+            border_width = 3
+        else:
+            color = get_color(ppr_score, is_entity, is_query_entity, is_passage)
+            border_color = color
+            border_width = 1
 
         # Tooltip with score info
+        node_type = 'Query Entity' if is_query_entity else 'Connected Chunk' if is_connected_to_query else 'Entity' if is_entity else 'Passage'
         title = f"""
         <b>{node_name}</b><br>
-        Type: {'Query Entity' if is_query_entity else 'Entity' if is_entity else 'Passage'}<br>
+        Type: {node_type}<br>
         PPR Score: {ppr_score:.6f}<br>
         Initial Weight: {initial_weight:.6f}<br>
         Hash: {hash_id}
@@ -333,19 +365,85 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
             label=label[:30] if len(label) > 30 else label,
             title=title,
             size=size,
-            color=color,
+            color={"background": color, "border": border_color, "highlight": {"background": "#00ff9d", "border": "#00ba7c"}},
             shape=shape,
-            borderWidth=3 if is_query_entity else 1,
+            borderWidth=border_width,
             borderWidthSelected=5
         )
 
-    # Add edges
+    # Get top passage keys from the top_passages data
+    top_passage_keys = set()
+    for p in scores_data.get("top_passages", [])[:5]:
+        # Find the passage key by matching content
+        for passage_key in hipporag.passage_node_keys:
+            try:
+                content = hipporag.chunk_embedding_store.get_row(passage_key).get("content", "")
+                if p["content"][:50] in content:
+                    top_passage_keys.add(passage_key)
+                    break
+            except:
+                pass
+
+    # Combine all highlighted node keys
+    highlighted_node_keys = query_entity_keys | connected_chunk_keys | top_passage_keys
+
+    # Add edges with highlighting for relevant connections
     for e in hipporag.graph.es:
         source = hipporag.graph.vs[e.source]['name']
         target = hipporag.graph.vs[e.target]['name']
+        source_hash = hipporag.graph.vs[e.source]['hash_id'] if 'hash_id' in hipporag.graph.vs.attributes() else ''
+        target_hash = hipporag.graph.vs[e.target]['hash_id'] if 'hash_id' in hipporag.graph.vs.attributes() else ''
         weight = e['weight'] if 'weight' in hipporag.graph.es.attributes() else 1
 
-        net.add_edge(source, target, value=weight, title=f"Weight: {weight:.4f}")
+        # Check if this edge connects query entities to chunks
+        source_is_query_entity = source_hash in query_entity_keys
+        target_is_query_entity = target_hash in query_entity_keys
+        source_is_connected_chunk = source_hash in connected_chunk_keys
+        target_is_connected_chunk = target_hash in connected_chunk_keys
+        source_is_top_passage = source_hash in top_passage_keys
+        target_is_top_passage = target_hash in top_passage_keys
+
+        # Determine edge style based on relevance
+        if (source_is_query_entity and target_is_connected_chunk) or (target_is_query_entity and source_is_connected_chunk):
+            # Direct edge from query entity to its chunk - GOLD highlight
+            edge_color = "#00ba7c"
+            edge_width = 4
+            edge_dashes = False
+        elif (source_is_query_entity or target_is_query_entity) and (source_is_top_passage or target_is_top_passage):
+            # Edge involving query entity and top passage - GREEN highlight
+            edge_color = "#00ba7c"
+            edge_width = 3
+            edge_dashes = False
+        elif source_is_query_entity or target_is_query_entity:
+            # Edge connected to query entity - CYAN highlight
+            edge_color = "#1d9bf0"
+            edge_width = 2.5
+            edge_dashes = False
+        elif source_is_top_passage or target_is_top_passage:
+            # Edge connected to top passage - PURPLE highlight
+            edge_color = "#794bc4"
+            edge_width = 2
+            edge_dashes = False
+        elif source_hash in highlighted_node_keys or target_hash in highlighted_node_keys:
+            # Edge connected to any highlighted node - lighter highlight
+            edge_color = "#536471"
+            edge_width = 1.5
+            edge_dashes = False
+        else:
+            # Default edge - dim gray
+            edge_color = "#2a3540"
+            edge_width = 0.5
+            edge_dashes = False
+
+        net.add_edge(
+            source,
+            target,
+            value=weight,
+            title=f"Weight: {weight:.4f}",
+            color=edge_color,
+            width=edge_width,
+            dashes=edge_dashes
+        )
 
     # Count node types for stats
     has_hash_id = 'hash_id' in hipporag.graph.vs.attributes()
@@ -511,10 +609,19 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
 
         <hr>
         <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #71767b;">Passage Relevance</p>
+        <div class="legend-item"><div class="legend-box" style="background: #00ba7c; border: 2px solid #00ff9d;"></div><span>Connected to Query Entity</span></div>
         <div class="legend-item"><div class="legend-box" style="background: #f91880;"></div><span>Top 10%</span></div>
         <div class="legend-item"><div class="legend-box" style="background: #794bc4;"></div><span>Top 10-25%</span></div>
         <div class="legend-item"><div class="legend-box" style="background: #1d9bf0;"></div><span>Top 25-50%</span></div>
         <div class="legend-item"><div class="legend-box" style="background: #536471;"></div><span>Bottom 50%</span></div>
+
+        <hr>
+        <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #71767b;">Edge Highlighting</p>
+        <div class="legend-item"><div style="width: 24px; height: 4px; background: #00ba7c; border-radius: 2px;"></div><span>Entity → Chunk (direct)</span></div>
+        <div class="legend-item"><div style="width: 24px; height: 3px; background: #1d9bf0; border-radius: 2px;"></div><span>Query entity connections</span></div>
+        <div class="legend-item"><div style="width: 24px; height: 2px; background: #794bc4; border-radius: 2px;"></div><span>Top passage connections</span></div>
+        <div class="legend-item"><div style="width: 24px; height: 1px; background: #2a3540; border-radius: 2px;"></div><span>Other edges</span></div>
+
         <p style="font-size: 11px; color: #71767b; margin-top: 8px;">💡 Click passage nodes to view content</p>
     </div>
 
