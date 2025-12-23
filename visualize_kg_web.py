@@ -10,8 +10,23 @@ import webbrowser
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import threading
 
-def load_graph(save_dir='outputs', llm_model='gpt-4o', embedding_model='text-embedding-3-large'):
-    """Load the igraph object from pickle file."""
+def load_graph(save_dir='outputs', llm_model=None, embedding_model=None):
+    """Load the igraph object from pickle file. Auto-detects model directories if not specified."""
+
+    # Auto-detect model directory if not specified
+    if llm_model is None or embedding_model is None:
+        if os.path.exists(save_dir):
+            for item in os.listdir(save_dir):
+                item_path = os.path.join(save_dir, item)
+                if os.path.isdir(item_path):
+                    graph_file = os.path.join(item_path, "graph.pickle")
+                    if os.path.exists(graph_file):
+                        print(f"Auto-detected graph at: {graph_file}")
+                        with open(graph_file, 'rb') as f:
+                            return pickle.load(f)
+        print(f"No graph found in {save_dir}")
+        return None
+
     graph_path = os.path.join(save_dir, f"{llm_model}_{embedding_model}", "graph.pickle")
 
     if not os.path.exists(graph_path):
@@ -23,8 +38,20 @@ def load_graph(save_dir='outputs', llm_model='gpt-4o', embedding_model='text-emb
 
     return graph
 
-def load_openie_results(save_dir='outputs', llm_model='gpt-4o'):
-    """Load OpenIE extraction results."""
+def load_openie_results(save_dir='outputs', llm_model=None):
+    """Load OpenIE extraction results. Auto-detects if llm_model not specified."""
+
+    # Auto-detect openie file if not specified
+    if llm_model is None:
+        if os.path.exists(save_dir):
+            for item in os.listdir(save_dir):
+                if item.startswith('openie_results_ner_') and item.endswith('.json'):
+                    openie_path = os.path.join(save_dir, item)
+                    print(f"Auto-detected OpenIE results at: {openie_path}")
+                    with open(openie_path, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+        return None
+
     openie_path = os.path.join(save_dir, f"openie_results_ner_{llm_model}.json")
 
     if not os.path.exists(openie_path):
