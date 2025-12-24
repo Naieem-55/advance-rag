@@ -5,8 +5,41 @@ import glob
 # Path to your documents folder
 DOCUMENTS_FOLDER = "documents"
 
+def chunk_text(text: str, max_chars: int = 1500, overlap: int = 200):
+    """Split text into smaller chunks with overlap to stay within token limits."""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + max_chars
+
+        # Try to break at a sentence or paragraph boundary
+        if end < len(text):
+            # Look for paragraph break
+            para_break = text.rfind('\n\n', start, end)
+            if para_break > start + max_chars // 2:
+                end = para_break
+            else:
+                # Look for sentence break (Bangla or English)
+                sentence_break = text.rfind('। ', start, end)  # Bangla
+                if sentence_break == -1:
+                    sentence_break = text.rfind('. ', start, end)  # English
+                if sentence_break > start + max_chars // 2:
+                    end = sentence_break + 1
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        start = end - overlap if end < len(text) else len(text)
+
+    return chunks
+
+
 def load_documents_from_folder(folder_path):
-    """Load all TXT files from a folder."""
+    """Load all TXT files from a folder with proper chunking."""
     if not os.path.exists(folder_path):
         print(f"Error: Folder '{folder_path}' not found!")
         return None
@@ -34,13 +67,14 @@ def load_documents_from_folder(folder_path):
                     lines = lines[1:]
                 text = '\n'.join(lines).strip()
                 if text and len(text) > 50:  # Skip very short chunks
-                    all_docs.append(text)
+                    # Chunk large texts to stay within embedding limits
+                    chunks = chunk_text(text, max_chars=1500)
+                    all_docs.extend(chunks)
         else:
-            # Split by double newline (paragraphs)
-            paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
-            for para in paragraphs:
-                if len(para) > 50:  # Skip very short paragraphs
-                    all_docs.append(para)
+            # Chunk the whole content
+            if content.strip():
+                chunks = chunk_text(content.strip(), max_chars=1500)
+                all_docs.extend(chunks)
 
     return all_docs
 
@@ -61,11 +95,11 @@ def main():
     print()
 
     # Initialize HippoRAG
-    print("Initializing HippoRAG with GPT-4o...")
+    print("Initializing HippoRAG with Gemini...")
     hipporag = HippoRAG(
         save_dir='outputs',
-        llm_model_name='gpt-4o',
-        embedding_model_name='text-embedding-3-large'
+        llm_model_name='gemini/gemini-2.5-flash',
+        embedding_model_name='gemini/gemini-embedding-001'
     )
 
     # Index documents
