@@ -16,14 +16,19 @@ load_dotenv()
 
 def get_query_relevance_scores(hipporag, query: str) -> Dict:
     """
-    Run retrieval and capture all intermediate scores for visualization.
+    Run retrieval using the SAME pipeline as /ask endpoint and capture all scores.
+
+    This uses the full hybrid retrieval pipeline:
+    1. Fact matching + reranking
+    2. DPR (dense passage retrieval)
+    3. PPR (if facts found) + Hybrid scoring
+    4. Cross-encoder reranking (SAME as /ask)
 
     Returns dict with:
-    - query_entities: entities extracted from query
-    - phrase_weights: initial entity weights from fact matching
-    - ppr_scores: final PPR scores for all nodes
-    - top_facts: matched facts
-    - top_passages: retrieved passages with scores
+    - query_entities: entities extracted from matched facts
+    - top_facts: matched facts from knowledge graph
+    - top_passages: FINAL retrieved passages (after cross-encoder reranking)
+    - ppr_scores: PPR scores for all nodes (for visualization)
     """
     if not hipporag.ready_to_retrieve:
         hipporag.prepare_retrieval_objects()
@@ -37,34 +42,77 @@ def get_query_relevance_scores(hipporag, query: str) -> Dict:
     # Rerank facts
     top_k_fact_indices, top_k_facts, rerank_log = hipporag.rerank_facts(query, query_fact_scores)
 
+    # Always get DPR results for hybrid scoring
+    dpr_sorted_doc_ids, dpr_sorted_doc_scores = hipporag.dense_passage_retrieval(query)
+
+    # Calculate fact confidence
+    if len(top_k_fact_indices) > 0 and len(query_fact_scores) > 0:
+        fact_confidence = float(np.max([query_fact_scores[i] for i in top_k_fact_indices]))
+    else:
+        fact_confidence = 0.0
+
+    # Hybrid retrieval (same as /ask endpoint)
     if len(top_k_facts) == 0:
-        # Fallback to DPR results when no facts found
-        dpr_sorted_doc_ids, dpr_sorted_doc_scores = hipporag.dense_passage_retrieval(query)
+        # No facts - use DPR only
+        sorted_doc_ids, sorted_doc_scores = dpr_sorted_doc_ids, dpr_sorted_doc_scores
+        use_dpr_only = True
+    else:
+        # PPR + Hybrid scoring
+        ppr_doc_ids, ppr_doc_scores = hipporag.graph_search_with_fact_entities(
+            query=query,
+            link_top_k=hipporag.global_config.linking_top_k,
+            query_fact_scores=query_fact_scores,
+            top_k_facts=top_k_facts,
+            top_k_fact_indices=top_k_fact_indices,
+            passage_node_weight=hipporag.global_config.passage_node_weight
+        )
 
-        top_passages = []
-        for i, doc_id in enumerate(dpr_sorted_doc_ids[:10]):
-            passage_key = hipporag.passage_node_keys[doc_id]
-            content = hipporag.chunk_embedding_store.get_row(passage_key)["content"]
-            top_passages.append({
-                "rank": i + 1,
-                "score": float(dpr_sorted_doc_scores[i]),
-                "content": content[:200] + "..." if len(content) > 200 else content
-            })
+        # Apply adaptive hybrid scoring
+        sorted_doc_ids, sorted_doc_scores = hipporag.compute_adaptive_hybrid_scores(
+            ppr_doc_ids=ppr_doc_ids,
+            ppr_doc_scores=ppr_doc_scores,
+            dpr_doc_ids=dpr_sorted_doc_ids,
+            dpr_doc_scores=dpr_sorted_doc_scores,
+            fact_confidence=fact_confidence
+        )
+        use_dpr_only = False
 
-        return {
-            "query": query,
-            "warning": "No facts matched - showing DPR results only",
-            "ppr_scores": {},
-            "query_entities": [],
-            "top_facts": [],
-            "top_passages": top_passages,
-            "total_nodes": len(hipporag.graph.vs),
-            "total_edges": len(hipporag.graph.es),
-            "use_dpr_only": True
-        }
+    # Get candidate documents for reranking
+    num_to_retrieve = hipporag.global_config.retrieval_top_k
+    candidate_count = min(num_to_retrieve * 2, len(sorted_doc_ids))
+    candidate_docs = [hipporag.chunk_embedding_store.get_row(hipporag.passage_node_keys[idx])["content"]
+                     for idx in sorted_doc_ids[:candidate_count]]
+    candidate_scores = sorted_doc_scores[:candidate_count]
 
-    # Calculate phrase weights (entity relevance)
-    from hipporag.utils.misc_utils import compute_mdhash_id
+    # Apply cross-encoder reranking (SAME as /ask endpoint)
+    if hipporag.use_reranker and len(candidate_docs) > 1:
+        try:
+            reranked_indices, reranked_scores = hipporag.reranker.rerank(
+                query=query,
+                documents=candidate_docs,
+                top_k=num_to_retrieve
+            )
+            final_docs = [candidate_docs[i] for i in reranked_indices[:num_to_retrieve]]
+            final_scores = reranked_scores[:num_to_retrieve]
+        except Exception as e:
+            print(f"Reranking failed, using original order: {e}")
+            final_docs = candidate_docs[:num_to_retrieve]
+            final_scores = list(candidate_scores[:num_to_retrieve])
+    else:
+        final_docs = candidate_docs[:num_to_retrieve]
+        final_scores = list(candidate_scores[:num_to_retrieve])
+
+    # Build top_passages from FINAL reranked results
+    top_passages = []
+    for i, (doc, score) in enumerate(zip(final_docs[:10], final_scores[:10])):
+        top_passages.append({
+            "rank": i + 1,
+            "score": float(score),
+            "content": doc[:200] + "..." if len(doc) > 200 else doc
+        })
+
+    # Calculate phrase weights for visualization (entity relevance in KG)
+    from src.hipporag.utils.misc_utils import compute_mdhash_id
 
     phrase_weights = np.zeros(len(hipporag.graph.vs['name']))
     passage_weights = np.zeros(len(hipporag.graph.vs['name']))
@@ -93,10 +141,7 @@ def get_query_relevance_scores(hipporag, query: str) -> Dict:
     number_of_occurs[number_of_occurs == 0] = 1
     phrase_weights /= number_of_occurs
 
-    # Get passage scores from DPR
-    dpr_sorted_doc_ids, dpr_sorted_doc_scores = hipporag.dense_passage_retrieval(query)
-
-    # Normalize DPR scores
+    # Normalize DPR scores for passage weights
     if len(dpr_sorted_doc_scores) > 0:
         min_score = np.min(dpr_sorted_doc_scores)
         max_score = np.max(dpr_sorted_doc_scores)
@@ -115,10 +160,10 @@ def get_query_relevance_scores(hipporag, query: str) -> Dict:
         passage_node_id = hipporag.node_name_to_vertex_idx[passage_node_key]
         passage_weights[passage_node_id] = passage_dpr_score * passage_node_weight
 
-    # Combined weights for PPR
+    # Combined weights for PPR visualization
     node_weights = phrase_weights + passage_weights
 
-    # Run PPR
+    # Run PPR for visualization
     reset_prob = np.where(np.isnan(node_weights) | (node_weights < 0), 0, node_weights)
     damping = hipporag.global_config.damping
 
@@ -131,10 +176,8 @@ def get_query_relevance_scores(hipporag, query: str) -> Dict:
         implementation='prpack'
     )
 
-    # Build results
+    # Build PPR scores for visualization
     ppr_scores = {}
-    initial_weights = {}
-
     for v in hipporag.graph.vs:
         node_name = v['name']
         hash_id = v['hash_id'] if 'hash_id' in hipporag.graph.vs.attributes() else ''
@@ -148,29 +191,22 @@ def get_query_relevance_scores(hipporag, query: str) -> Dict:
             'passage_weight': float(passage_weights[idx])
         }
 
-    # Get top passages
-    doc_scores = np.array([pagerank_scores[idx] for idx in hipporag.passage_node_idxs])
-    sorted_doc_ids = np.argsort(doc_scores)[::-1]
-
-    top_passages = []
-    for i, doc_id in enumerate(sorted_doc_ids[:10]):
-        passage_key = hipporag.passage_node_keys[doc_id]
-        content = hipporag.chunk_embedding_store.get_row(passage_key)["content"]
-        top_passages.append({
-            "rank": i + 1,
-            "score": float(doc_scores[doc_id]),
-            "content": content[:200] + "..." if len(content) > 200 else content
-        })
-
-    return {
+    result = {
         "query": query,
         "query_entities": list(query_entities),
         "top_facts": [{"subject": f[0], "predicate": f[1], "object": f[2]} for f in top_k_facts[:10]],
-        "top_passages": top_passages,
+        "top_passages": top_passages,  # Now shows FINAL reranked passages
         "ppr_scores": ppr_scores,
         "total_nodes": len(hipporag.graph.vs),
-        "total_edges": len(hipporag.graph.es)
+        "total_edges": len(hipporag.graph.es),
+        "retrieval_method": "dpr_only" if use_dpr_only else "hybrid_ppr_dpr",
+        "fact_confidence": fact_confidence
     }
+
+    if use_dpr_only:
+        result["warning"] = "No facts matched in KG - using DPR + cross-encoder reranking"
+
+    return result
 
 
 def create_query_visualization(hipporag, query: str, output_path: str = "outputs/query_graph.html") -> str:
@@ -196,7 +232,7 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
     # Create network with professional styling
     net = Network(height="100vh", width="100vw", bgcolor="#0f1419", font_color="#e7e9ea")
 
-    # Professional physics settings
+    # Professional physics settings - STABLE after initial layout
     net.set_options('''
     {
         "nodes": {
@@ -209,15 +245,23 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
             "smooth": {"type": "continuous", "roundness": 0.5}
         },
         "physics": {
+            "enabled": true,
             "forceAtlas2Based": {
-                "gravitationalConstant": -80,
-                "centralGravity": 0.01,
-                "springLength": 120,
-                "springConstant": 0.08,
-                "avoidOverlap": 0.5
+                "gravitationalConstant": -100,
+                "centralGravity": 0.02,
+                "springLength": 150,
+                "springConstant": 0.1,
+                "avoidOverlap": 0.8
             },
             "solver": "forceAtlas2Based",
-            "stabilization": {"iterations": 150, "fit": true}
+            "stabilization": {
+                "enabled": true,
+                "iterations": 200,
+                "updateInterval": 25,
+                "fit": true
+            },
+            "maxVelocity": 50,
+            "minVelocity": 0.1
         },
         "interaction": {
             "hover": true,
@@ -280,7 +324,7 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
                 return "#ff00ff"  # Magenta - top 5%
 
     # Import for hash ID computation
-    from hipporag.utils.misc_utils import compute_mdhash_id
+    from src.hipporag.utils.misc_utils import compute_mdhash_id
 
     # Pre-compute query entity keys and their connected chunks
     query_entity_keys = set()
@@ -689,32 +733,57 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
 
     html = html.replace('<body>', f'<body>{html_content}')
 
-    # Add network click handler for viewing chunk content
+    # Add network click handler and physics stabilization
     network_click_handler = """
     <script>
-    // Wait for network to be ready, then add click handler
-    function addClickHandler() {
+    // Wait for network to be ready, then add handlers
+    function setupNetwork() {
         if (typeof network !== 'undefined') {
+            // DISABLE PHYSICS after stabilization - makes graph stable
+            network.on('stabilizationIterationsDone', function() {
+                console.log('Stabilization complete - disabling physics');
+                network.setOptions({ physics: { enabled: false } });
+            });
+
+            // Also disable after stabilized event
+            network.on('stabilized', function() {
+                console.log('Graph stabilized - disabling physics');
+                network.setOptions({ physics: { enabled: false } });
+            });
+
+            // Click handler for viewing chunk content
             network.on('click', function(params) {
                 if (params.nodes.length > 0) {
                     var nodeId = params.nodes[0];
-                    // Check if this node has chunk content
                     if (chunkContents[nodeId]) {
                         document.getElementById('chunkContent').innerText = chunkContents[nodeId];
                         document.getElementById('chunkModal').style.display = 'block';
                     }
                 }
             });
-            console.log('Click handler added');
+
+            // Double-click to re-enable physics temporarily (for repositioning)
+            network.on('doubleClick', function(params) {
+                if (params.nodes.length === 0) {
+                    console.log('Re-enabling physics for 3 seconds...');
+                    network.setOptions({ physics: { enabled: true } });
+                    setTimeout(function() {
+                        network.setOptions({ physics: { enabled: false } });
+                        console.log('Physics disabled again');
+                    }, 3000);
+                }
+            });
+
+            console.log('Network handlers added');
         } else {
-            setTimeout(addClickHandler, 100);
+            setTimeout(setupNetwork, 100);
         }
     }
     // Start checking after DOM loads
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', addClickHandler);
+        document.addEventListener('DOMContentLoaded', setupNetwork);
     } else {
-        setTimeout(addClickHandler, 500);
+        setTimeout(setupNetwork, 500);
     }
     </script>
     """
@@ -730,13 +799,13 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
 
 def visualize_query(query: str = None):
     """Main function to visualize query relevance on knowledge graph."""
-    from hipporag import HippoRAG
+    from src.hipporag import HippoRAG
 
     print("Loading HippoRAG...")
     hipporag = HippoRAG(
         save_dir='outputs',
-        llm_model_name='gemini/gemini-2.5-flash',
-        embedding_model_name='gemini/gemini-embedding-001'
+        llm_model_name='qwen3-next:80b-a3b-instruct-q4_K_M',
+        embedding_model_name='Transformers/intfloat/multilingual-e5-large'
     )
 
     hipporag.prepare_retrieval_objects()

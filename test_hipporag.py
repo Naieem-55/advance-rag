@@ -1,6 +1,8 @@
-from hipporag import HippoRAG
+from src.hipporag import HippoRAG
 import os
 import glob
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Path to your documents folder
 DOCUMENTS_FOLDER = "documents"
@@ -95,11 +97,11 @@ def main():
     print()
 
     # Initialize HippoRAG
-    print("Initializing HippoRAG with Gemini...")
+    print("Initializing HippoRAG with Qwen3 via Ollama...")
     hipporag = HippoRAG(
         save_dir='outputs',
-        llm_model_name='gemini/gemini-2.5-flash',
-        embedding_model_name='gemini/gemini-embedding-001'
+        llm_model_name='qwen3-next:80b-a3b-instruct-q4_K_M',
+        embedding_model_name='Transformers/intfloat/multilingual-e5-large'
     )
 
     # Index documents

@@ -17,7 +17,7 @@ from collections import defaultdict
 import re
 import time
 
-from .llm import _get_llm_class, BaseLLM
+from .llm import _get_llm_class, _get_llm_for_task, BaseLLM
 from .embedding_model import _get_embedding_model_class, BaseEmbeddingModel
 from .embedding_store import EmbeddingStore
 from .information_extraction import OpenIE
@@ -125,10 +125,43 @@ class HippoRAG:
             logger.info(f"Creating working directory: {self.working_dir}")
             os.makedirs(self.working_dir, exist_ok=True)
 
-        self.llm_model: BaseLLM = _get_llm_class(self.global_config)
+        # Initialize LLM models based on multi-model configuration
+        if self.global_config.use_multi_model:
+            logger.info("Using multi-model architecture:")
+            logger.info(f"  Reasoning LLM: {self.global_config.reasoning_llm_name}")
+            logger.info(f"  Answer LLM: {self.global_config.answer_llm_name}")
+            logger.info(f"  Fallback LLM: {self.global_config.fallback_llm_name}")
+
+            # Reasoning LLM for OpenIE/NER (Thinking model)
+            self.reasoning_llm: BaseLLM = _get_llm_for_task(
+                self.global_config,
+                self.global_config.reasoning_llm_name,
+                self.global_config.reasoning_llm_base_url
+            )
+            # Answer LLM for response generation (Instruct model)
+            self.answer_llm: BaseLLM = _get_llm_for_task(
+                self.global_config,
+                self.global_config.answer_llm_name,
+                self.global_config.answer_llm_base_url
+            )
+            # Fallback LLM (local Ollama)
+            self.fallback_llm: BaseLLM = _get_llm_for_task(
+                self.global_config,
+                self.global_config.fallback_llm_name,
+                self.global_config.fallback_llm_base_url
+            )
+            # Default llm_model points to answer_llm for backward compatibility
+            self.llm_model = self.answer_llm
+        else:
+            # Single model mode (backward compatible)
+            self.llm_model: BaseLLM = _get_llm_class(self.global_config)
+            self.reasoning_llm = self.llm_model
+            self.answer_llm = self.llm_model
+            self.fallback_llm = self.llm_model
 
         if self.global_config.openie_mode == 'online':
-            self.openie = OpenIE(llm_model=self.llm_model)
+            # Use reasoning LLM for OpenIE (better for entity extraction)
+            self.openie = OpenIE(llm_model=self.reasoning_llm)
         elif self.global_config.openie_mode == 'offline':
             # Lazy import for Windows compatibility
             from .information_extraction.openie_vllm_offline import VLLMOfflineOpenIE
@@ -160,6 +193,7 @@ class HippoRAG:
 
         self.openie_results_path = os.path.join(self.global_config.save_dir,f'openie_results_ner_{self.global_config.llm_name.replace("/", "_")}.json')
 
+        # LLM-based fact reranker (SLOW - disabled by default)
         self.rerank_filter = DSPyFilter(self)
 
         # BM25 retriever for hybrid search
@@ -168,10 +202,14 @@ class HippoRAG:
         self.use_hybrid_search = True  # Enable hybrid search by default
         self.hybrid_alpha = 0.7  # Weight for dense scores (0.7 dense, 0.3 BM25)
 
-        # Cross-encoder reranker for precision
-        # Disabled by default - PPR provides good ranking for multilingual content
-        self.use_reranker = False
-        self.reranker = get_reranker(reranker_type="gemini", model_name=self.global_config.llm_name)
+        # BGE Reranker for excellent multilingual support (including Bangla)
+        # BAAI/bge-reranker-v2-m3 is specifically trained for reranking
+        self.use_reranker = True
+        self.reranker = get_reranker(reranker_type="cross-encoder", model_name="BAAI/bge-reranker-v2-m3")
+
+        # Use cross-encoder for fact reranking (FAST - replaces slow LLM-based reranking)
+        self.use_cross_encoder_fact_reranking = True
+        self.fact_reranker = self.reranker  # Reuse same model for facts
 
         # Answer verification to prevent hallucination
         self.use_answer_verification = True
@@ -951,7 +989,20 @@ class HippoRAG:
             all_qa_messages.append(
                 self.prompt_template_manager.render(name=f'rag_qa_{prompt_dataset_name}', prompt_user=prompt_user))
 
-        all_qa_results = [self.llm_model.infer(qa_messages) for qa_messages in tqdm(all_qa_messages, desc="QA Reading")]
+        # Use answer_llm for QA with fallback to fallback_llm
+        all_qa_results = []
+        for qa_messages in tqdm(all_qa_messages, desc="QA Reading"):
+            try:
+                result = self.answer_llm.infer(qa_messages)
+                all_qa_results.append(result)
+            except Exception as e:
+                logger.warning(f"Answer LLM failed: {e}. Using fallback LLM.")
+                try:
+                    result = self.fallback_llm.infer(qa_messages)
+                    all_qa_results.append(result)
+                except Exception as e2:
+                    logger.error(f"Fallback LLM also failed: {e2}")
+                    all_qa_results.append(("Error generating answer", {}, False))
 
         all_response_message, all_metadata, all_cache_hit = zip(*all_qa_results)
         all_response_message, all_metadata = list(all_response_message), list(all_metadata)
@@ -1811,50 +1862,79 @@ class HippoRAG:
 
     def rerank_facts(self, query: str, query_fact_scores: np.ndarray) -> Tuple[List[int], List[Tuple], dict]:
         """
+        Rerank candidate facts using cross-encoder (FAST) or LLM-based reranking (SLOW).
 
         Args:
+            query: The search query
+            query_fact_scores: Embedding-based scores for all facts
 
         Returns:
-            top_k_fact_indicies:
-            top_k_facts:
+            top_k_fact_indices: Indices of top facts after reranking
+            top_k_facts: The actual fact tuples (subject, predicate, object)
             rerank_log (dict): {'facts_before_rerank': candidate_facts, 'facts_after_rerank': top_k_facts}
-                - candidate_facts (list): list of link_top_k facts (each fact is a relation triple in tuple data type).
-                - top_k_facts:
-
-
         """
-        # load args
         link_top_k: int = self.global_config.linking_top_k
-        
+
         # Check if there are any facts to rerank
         if len(query_fact_scores) == 0 or len(self.fact_node_keys) == 0:
             logger.warning("No facts available for reranking. Returning empty lists.")
             return [], [], {'facts_before_rerank': [], 'facts_after_rerank': []}
-            
+
         try:
-            # Get the top k facts by score
-            if len(query_fact_scores) <= link_top_k:
-                # If we have fewer facts than requested, use all of them
+            # Get more candidates for reranking (2x link_top_k)
+            candidate_count = min(link_top_k * 2, len(query_fact_scores))
+
+            if len(query_fact_scores) <= candidate_count:
                 candidate_fact_indices = np.argsort(query_fact_scores)[::-1].tolist()
             else:
-                # Otherwise get the top k
-                candidate_fact_indices = np.argsort(query_fact_scores)[-link_top_k:][::-1].tolist()
-                
-            # Get the actual fact IDs
+                candidate_fact_indices = np.argsort(query_fact_scores)[-candidate_count:][::-1].tolist()
+
+            # Get the actual fact content
             real_candidate_fact_ids = [self.fact_node_keys[idx] for idx in candidate_fact_indices]
             fact_row_dict = self.fact_embedding_store.get_rows(real_candidate_fact_ids)
             candidate_facts = [eval(fact_row_dict[id]['content']) for id in real_candidate_fact_ids]
-            
-            # Rerank the facts
-            top_k_fact_indices, top_k_facts, reranker_dict = self.rerank_filter(query,
-                                                                                candidate_facts,
-                                                                                candidate_fact_indices,
-                                                                                len_after_rerank=link_top_k)
-            
-            rerank_log = {'facts_before_rerank': candidate_facts, 'facts_after_rerank': top_k_facts}
-            
-            return top_k_fact_indices, top_k_facts, rerank_log
-            
+
+            # Use cross-encoder for FAST reranking (instead of slow LLM-based)
+            if self.use_cross_encoder_fact_reranking and self.fact_reranker is not None:
+                # Convert facts to strings for cross-encoder
+                # Format: "subject | predicate | object"
+                fact_strings = [f"{f[0]} | {f[1]} | {f[2]}" for f in candidate_facts]
+
+                # Rerank using cross-encoder (FAST - ~1-2 seconds)
+                reranked_indices, reranked_scores = self.fact_reranker.rerank(
+                    query=query,
+                    documents=fact_strings,
+                    top_k=link_top_k
+                )
+
+                # Map back to original indices and facts
+                top_k_fact_indices = [candidate_fact_indices[i] for i in reranked_indices]
+                top_k_facts = [candidate_facts[i] for i in reranked_indices]
+
+                rerank_log = {
+                    'facts_before_rerank': candidate_facts,
+                    'facts_after_rerank': top_k_facts,
+                    'reranker': 'cross-encoder',
+                    'scores': reranked_scores
+                }
+
+                return top_k_fact_indices, top_k_facts, rerank_log
+            else:
+                # Fallback to LLM-based reranking (SLOW - 3-5 minutes)
+                logger.info("Using LLM-based fact reranking (slow)")
+                top_k_fact_indices, top_k_facts, reranker_dict = self.rerank_filter(query,
+                                                                                    candidate_facts,
+                                                                                    candidate_fact_indices,
+                                                                                    len_after_rerank=link_top_k)
+
+                rerank_log = {
+                    'facts_before_rerank': candidate_facts,
+                    'facts_after_rerank': top_k_facts,
+                    'reranker': 'llm'
+                }
+
+                return top_k_fact_indices, top_k_facts, rerank_log
+
         except Exception as e:
             logger.error(f"Error in rerank_facts: {str(e)}")
             return [], [], {'facts_before_rerank': [], 'facts_after_rerank': [], 'error': str(e)}

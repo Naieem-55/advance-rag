@@ -16,12 +16,14 @@ def load_graph(save_dir='outputs', llm_model=None, embedding_model=None):
     # Auto-detect model directory if not specified
     if llm_model is None or embedding_model is None:
         if os.path.exists(save_dir):
+            print(f"Scanning {save_dir} for graph.pickle...")
             for item in os.listdir(save_dir):
                 item_path = os.path.join(save_dir, item)
                 if os.path.isdir(item_path):
                     graph_file = os.path.join(item_path, "graph.pickle")
+                    print(f"  Checking: {item_path}")
                     if os.path.exists(graph_file):
-                        print(f"Auto-detected graph at: {graph_file}")
+                        print(f"  Found graph at: {graph_file}")
                         with open(graph_file, 'rb') as f:
                             return pickle.load(f)
         print(f"No graph found in {save_dir}")
@@ -82,7 +84,7 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
         notebook=False
     )
 
-    # Professional physics settings
+    # Professional physics settings - STABLE after initial layout
     net.set_options('''
     {
         "nodes": {
@@ -100,15 +102,23 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
             "arrows": {"to": {"enabled": true, "scaleFactor": 0.4}}
         },
         "physics": {
+            "enabled": true,
             "forceAtlas2Based": {
-                "gravitationalConstant": -80,
-                "centralGravity": 0.01,
-                "springLength": 120,
-                "springConstant": 0.08,
-                "avoidOverlap": 0.5
+                "gravitationalConstant": -100,
+                "centralGravity": 0.02,
+                "springLength": 150,
+                "springConstant": 0.1,
+                "avoidOverlap": 0.8
             },
             "solver": "forceAtlas2Based",
-            "stabilization": {"enabled": true, "iterations": 200, "fit": true}
+            "stabilization": {
+                "enabled": true,
+                "iterations": 200,
+                "updateInterval": 25,
+                "fit": true
+            },
+            "maxVelocity": 50,
+            "minVelocity": 0.1
         },
         "interaction": {
             "hover": true,
@@ -359,8 +369,44 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
     </div>
     '''
 
+    # JavaScript to disable physics after stabilization
+    stabilization_script = '''
+    <script>
+    function setupStableNetwork() {
+        if (typeof network !== 'undefined') {
+            // DISABLE PHYSICS after stabilization - makes graph stable
+            network.on('stabilizationIterationsDone', function() {
+                console.log('Stabilization complete - disabling physics');
+                network.setOptions({ physics: { enabled: false } });
+            });
+            network.on('stabilized', function() {
+                network.setOptions({ physics: { enabled: false } });
+            });
+            // Double-click empty space to re-enable physics temporarily
+            network.on('doubleClick', function(params) {
+                if (params.nodes.length === 0) {
+                    network.setOptions({ physics: { enabled: true } });
+                    setTimeout(function() {
+                        network.setOptions({ physics: { enabled: false } });
+                    }, 3000);
+                }
+            });
+        } else {
+            setTimeout(setupStableNetwork, 100);
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupStableNetwork);
+    } else {
+        setTimeout(setupStableNetwork, 500);
+    }
+    </script>
+    '''
+
     # Insert legend after body tag
     html_content = html_content.replace('<body>', f'<body>{legend_html}')
+    # Insert stabilization script before closing body
+    html_content = html_content.replace('</body>', f'{stabilization_script}</body>')
 
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(html_content)
@@ -402,14 +448,23 @@ def create_triples_visualization(openie_results, output_file='outputs/triples_gr
             "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}}
         },
         "physics": {
+            "enabled": true,
             "forceAtlas2Based": {
                 "gravitationalConstant": -100,
-                "centralGravity": 0.005,
+                "centralGravity": 0.02,
                 "springLength": 150,
-                "springConstant": 0.05
+                "springConstant": 0.08,
+                "avoidOverlap": 0.8
             },
             "solver": "forceAtlas2Based",
-            "stabilization": {"iterations": 500}
+            "stabilization": {
+                "enabled": true,
+                "iterations": 300,
+                "updateInterval": 25,
+                "fit": true
+            },
+            "maxVelocity": 50,
+            "minVelocity": 0.1
         },
         "interaction": {
             "hover": true,
@@ -501,7 +556,39 @@ def create_triples_visualization(openie_results, output_file='outputs/triples_gr
     </div>
     '''
 
+    # JavaScript to disable physics after stabilization
+    triples_stabilization_script = '''
+    <script>
+    function setupStableNetwork() {
+        if (typeof network !== 'undefined') {
+            network.on('stabilizationIterationsDone', function() {
+                network.setOptions({ physics: { enabled: false } });
+            });
+            network.on('stabilized', function() {
+                network.setOptions({ physics: { enabled: false } });
+            });
+            network.on('doubleClick', function(params) {
+                if (params.nodes.length === 0) {
+                    network.setOptions({ physics: { enabled: true } });
+                    setTimeout(function() {
+                        network.setOptions({ physics: { enabled: false } });
+                    }, 3000);
+                }
+            });
+        } else {
+            setTimeout(setupStableNetwork, 100);
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupStableNetwork);
+    } else {
+        setTimeout(setupStableNetwork, 500);
+    }
+    </script>
+    '''
+
     html_content = html_content.replace('<body>', f'<body>{legend_html}')
+    html_content = html_content.replace('</body>', f'{triples_stabilization_script}</body>')
 
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(html_content)

@@ -70,9 +70,15 @@ class CrossEncoderReranker:
         # Get scores from cross-encoder
         scores = self.model.predict(pairs)
 
+        # Normalize scores to 0-1 range using sigmoid
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
+
+        normalized_scores = sigmoid(scores)
+
         # Sort by score (descending)
-        sorted_indices = np.argsort(scores)[::-1]
-        sorted_scores = scores[sorted_indices]
+        sorted_indices = np.argsort(normalized_scores)[::-1]
+        sorted_scores = normalized_scores[sorted_indices]
 
         if top_k:
             sorted_indices = sorted_indices[:top_k]

@@ -14,14 +14,44 @@ logger = get_logger(__name__)
 @dataclass
 class BaseConfig:
     """One and only configuration."""
-    # LLM specific attributes 
+    # LLM specific attributes
     llm_name: str = field(
-        default="gpt-4o-mini",
+        default="qwen3-next:80b-a3b-instruct-q4_K_M",
         metadata={"help": "Class name indicating which LLM model to use."}
     )
     llm_base_url: str = field(
-        default=None,
+        default="http://localhost:11434/v1",
         metadata={"help": "Base URL for the LLM model, if none, means using OPENAI service."}
+    )
+
+    # Multi-model architecture for better accuracy
+    use_multi_model: bool = field(
+        default=False,
+        metadata={"help": "Enable multi-model architecture with separate models for reasoning and answer generation."}
+    )
+    reasoning_llm_name: str = field(
+        default="Qwen/Qwen3-235B-A22B",
+        metadata={"help": "LLM for reasoning tasks (OpenIE, NER). Use a Thinking model for better chain-of-thought."}
+    )
+    reasoning_llm_base_url: str = field(
+        default="https://api.together.xyz/v1",
+        metadata={"help": "Base URL for the reasoning LLM."}
+    )
+    answer_llm_name: str = field(
+        default="Qwen/Qwen3-235B-A22B",
+        metadata={"help": "LLM for answer generation. Use an Instruct model for direct answers."}
+    )
+    answer_llm_base_url: str = field(
+        default="https://api.together.xyz/v1",
+        metadata={"help": "Base URL for the answer generation LLM."}
+    )
+    fallback_llm_name: str = field(
+        default="qwen3-next:80b-a3b-instruct-q4_K_M",
+        metadata={"help": "Fallback LLM (local Ollama) when API models fail."}
+    )
+    fallback_llm_base_url: str = field(
+        default="http://localhost:11434/v1",
+        metadata={"help": "Base URL for the fallback LLM (Ollama)."}
     )
     embedding_base_url: str = field(
         default=None,

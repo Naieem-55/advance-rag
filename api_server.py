@@ -15,12 +15,38 @@ import glob
 from dotenv import load_dotenv
 load_dotenv()
 
-# Verify Gemini API key is set (used for both LLM and Embeddings)
-if not os.getenv("GEMINI_API_KEY"):
-    print("WARNING: GEMINI_API_KEY not set!")
-    print("Please add your Gemini API key to .env file")
+# Multi-model configuration for better accuracy
+# - Reasoning LLM (Thinking model) for OpenIE/NER
+# - Answer LLM (Instruct model) for response generation
+# - Fallback LLM (Local Ollama) for reliability
+
+MULTI_MODEL_CONFIG = {
+    "use_multi_model": True,
+    # Reasoning model for OpenIE/NER (Thinking model - better chain-of-thought)
+    "reasoning_llm_name": "qwen3-next:80b-a3b-thinking-fp8",
+    "reasoning_llm_base_url": "http://localhost:11434/v1",
+    # Answer generation model (Instruct model - direct answers)
+    "answer_llm_name": "qwen3-next:80b-a3b-instruct-fp8",
+    "answer_llm_base_url": "http://localhost:11434/v1",
+    # Fallback to local Ollama (quantized version)
+    "fallback_llm_name": "qwen3-next:80b-a3b-instruct-q4_K_M",
+    "fallback_llm_base_url": "http://localhost:11434/v1",
+}
+
+# Set to True to use multi-model architecture
+USE_MULTI_MODEL = True  # Enabled for Thinking + Instruct setup
+
+print("=" * 60)
+if USE_MULTI_MODEL:
+    print("Multi-Model Mode ENABLED:")
+    print(f"  Reasoning: {MULTI_MODEL_CONFIG['reasoning_llm_name']}")
+    print(f"  Answer:    {MULTI_MODEL_CONFIG['answer_llm_name']}")
+    print(f"  Fallback:  {MULTI_MODEL_CONFIG['fallback_llm_name']}")
 else:
-    print("Gemini API Key loaded (for LLM + Embeddings)")
+    print("Single-Model Mode:")
+    print("  Using: qwen3-next:80b-a3b-instruct-q4_K_M (Ollama)")
+print("  Embeddings: multilingual-e5-large")
+print("=" * 60)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -65,6 +91,29 @@ class StatusResponse(BaseModel):
 
 class DocumentsFromFolderRequest(BaseModel):
     folder_path: str = "documents"
+
+
+def create_hipporag_config():
+    """Create HippoRAG configuration based on multi-model settings."""
+    from src.hipporag.utils.config_utils import BaseConfig
+
+    config = BaseConfig(
+        llm_name="qwen3-next:80b-a3b-instruct-q4_K_M",
+        llm_base_url="http://localhost:11434/v1",
+        embedding_model_name="Transformers/intfloat/multilingual-e5-large",
+        save_dir="outputs"
+    )
+
+    if USE_MULTI_MODEL:
+        config.use_multi_model = True
+        config.reasoning_llm_name = MULTI_MODEL_CONFIG["reasoning_llm_name"]
+        config.reasoning_llm_base_url = MULTI_MODEL_CONFIG["reasoning_llm_base_url"]
+        config.answer_llm_name = MULTI_MODEL_CONFIG["answer_llm_name"]
+        config.answer_llm_base_url = MULTI_MODEL_CONFIG["answer_llm_base_url"]
+        config.fallback_llm_name = MULTI_MODEL_CONFIG["fallback_llm_name"]
+        config.fallback_llm_base_url = MULTI_MODEL_CONFIG["fallback_llm_base_url"]
+
+    return config
 
 
 def chunk_text(text: str, max_chars: int = 1500, overlap: int = 200) -> List[str]:
@@ -185,13 +234,10 @@ async def index_documents(request: IndexRequest):
         raise HTTPException(status_code=400, detail="No documents provided")
 
     try:
-        from hipporag import HippoRAG
+        from src.hipporag import HippoRAG
 
-        hipporag_instance = HippoRAG(
-            save_dir='outputs',
-            llm_model_name='gemini/gemini-2.5-flash',
-            embedding_model_name='gemini/gemini-embedding-001'
-        )
+        config = create_hipporag_config()
+        hipporag_instance = HippoRAG(global_config=config)
 
         hipporag_instance.index(docs=request.documents)
 
@@ -218,13 +264,10 @@ async def index_from_folder(request: DocumentsFromFolderRequest):
         if not documents:
             raise HTTPException(status_code=400, detail="No documents found in folder")
 
-        from hipporag import HippoRAG
+        from src.hipporag import HippoRAG
 
-        hipporag_instance = HippoRAG(
-            save_dir='outputs',
-            llm_model_name='gemini/gemini-2.5-flash',
-            embedding_model_name='gemini/gemini-embedding-001'
-        )
+        config = create_hipporag_config()
+        hipporag_instance = HippoRAG(global_config=config)
 
         hipporag_instance.index(docs=documents)
 
@@ -289,12 +332,11 @@ async def ask_question(request: QuestionRequest):
 
             for i, doc in enumerate(docs[:5]):  # Top 5 references
                 score = float(scores[i]) if i < len(scores) else 0.0
-                # Only include references with meaningful scores (> 0.01)
-                if score > 0.01:
-                    references.append(Reference(
-                        content=doc[:500] + "..." if len(doc) > 500 else doc,
-                        score=score
-                    ))
+                # Include all references (removed score threshold)
+                references.append(Reference(
+                    content=doc[:500] + "..." if len(doc) > 500 else doc,
+                    score=score
+                ))
 
         return AnswerResponse(
             question=request.question,
@@ -523,13 +565,10 @@ async def reload_from_cache():
     global hipporag_instance
 
     try:
-        from hipporag import HippoRAG
+        from src.hipporag import HippoRAG
 
-        hipporag_instance = HippoRAG(
-            save_dir='outputs',
-            llm_model_name='gemini/gemini-2.5-flash',
-            embedding_model_name='gemini/gemini-embedding-001'
-        )
+        config = create_hipporag_config()
+        hipporag_instance = HippoRAG(global_config=config)
 
         # Load existing index if available
         hipporag_instance.load()
@@ -548,13 +587,13 @@ def auto_load_hipporag():
     global hipporag_instance
 
     try:
-        from hipporag import HippoRAG
+        from src.hipporag import HippoRAG
         import os
 
         # Check if cached data exists
-        cache_dir = 'outputs/gemini_gemini-2.5-flash_gemini_gemini-embedding-001'
+        cache_dir = 'outputs/qwen3-next_80b-a3b-instruct-q4_K_M_Transformers_intfloat_multilingual-e5-large'
         if not os.path.exists(cache_dir):
-            cache_dir = 'outputs/gemini_gemini-2.0-flash_gemini_gemini-embedding-001'
+            cache_dir = 'outputs/gemini_gemini-2.5-flash_gemini_gemini-embedding-001'
         if not os.path.exists(cache_dir):
             cache_dir = 'outputs/gpt-4o_text-embedding-3-large'
 
@@ -562,11 +601,8 @@ def auto_load_hipporag():
             print(f"Found existing cache at {cache_dir}")
             print("Auto-loading HippoRAG from cache...")
 
-            hipporag_instance = HippoRAG(
-                save_dir='outputs',
-                llm_model_name='gemini/gemini-2.5-flash',
-                embedding_model_name='gemini/gemini-embedding-001'
-            )
+            config = create_hipporag_config()
+            hipporag_instance = HippoRAG(global_config=config)
 
             # Try to load existing index by preparing retrieval objects
             hipporag_instance.prepare_retrieval_objects()
