@@ -22,30 +22,32 @@ load_dotenv()
 
 MULTI_MODEL_CONFIG = {
     "use_multi_model": True,
-    # Reasoning model for OpenIE/NER (Thinking model - better chain-of-thought)
-    "reasoning_llm_name": "qwen3-next:80b-a3b-thinking-fp8",
-    "reasoning_llm_base_url": "http://localhost:11434/v1",
-    # Answer generation model (Instruct model - direct answers)
-    "answer_llm_name": "qwen3-next:80b-a3b-instruct-fp8",
-    "answer_llm_base_url": "http://localhost:11434/v1",
-    # Fallback to local Ollama (quantized version)
+    # GPT-4o for OpenIE/NER (fast, accurate entity extraction)
+    "reasoning_llm_name": "gpt-4o",
+    "reasoning_llm_base_url": None,  # Use OpenAI API directly
+    # Qwen3 for answer generation (local, no API cost)
+    "answer_llm_name": "qwen3-next:80b-a3b-instruct-q4_K_M",
+    "answer_llm_base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
+    # Fallback to local Ollama
     "fallback_llm_name": "qwen3-next:80b-a3b-instruct-q4_K_M",
-    "fallback_llm_base_url": "http://localhost:11434/v1",
+    "fallback_llm_base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
 }
 
 # Set to True to use multi-model architecture
-USE_MULTI_MODEL = True  # Enabled for Thinking + Instruct setup
+# GPT-4o for NER/Triple Extraction, Qwen3 for answers
+USE_MULTI_MODEL = True
 
 print("=" * 60)
 if USE_MULTI_MODEL:
     print("Multi-Model Mode ENABLED:")
-    print(f"  Reasoning: {MULTI_MODEL_CONFIG['reasoning_llm_name']}")
-    print(f"  Answer:    {MULTI_MODEL_CONFIG['answer_llm_name']}")
-    print(f"  Fallback:  {MULTI_MODEL_CONFIG['fallback_llm_name']}")
+    print(f"  NER/Triples: {MULTI_MODEL_CONFIG['reasoning_llm_name']} (OpenAI)")
+    print(f"  Answers:     {MULTI_MODEL_CONFIG['answer_llm_name']} (Ollama)")
+    print(f"  Fallback:    {MULTI_MODEL_CONFIG['fallback_llm_name']}")
 else:
     print("Single-Model Mode:")
     print("  Using: qwen3-next:80b-a3b-instruct-q4_K_M (Ollama)")
-print("  Embeddings: multilingual-e5-large")
+print("  Embeddings: multilingual-e5-large (local)")
+print("  Reranker:   bge-reranker-v2-m3 (local)")
 print("=" * 60)
 
 # Initialize FastAPI app
@@ -99,9 +101,11 @@ def create_hipporag_config():
 
     config = BaseConfig(
         llm_name="qwen3-next:80b-a3b-instruct-q4_K_M",
-        llm_base_url="http://localhost:11434/v1",
+        llm_base_url="http://192.168.2.54:11434/v1",  # Mac Ollama server
         embedding_model_name="Transformers/intfloat/multilingual-e5-large",
-        save_dir="outputs"
+        save_dir="outputs",
+        retrieval_top_k=20,  # Reduced for faster cross-encoder reranking
+        qa_top_k=10,  # Feed top 10 docs to LLM
     )
 
     if USE_MULTI_MODEL:
@@ -193,6 +197,13 @@ def get_hipporag():
         )
 
     return hipporag_instance
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Return empty response for favicon requests."""
+    from fastapi.responses import Response
+    return Response(status_code=204)  # No content
 
 
 @app.get("/", response_model=StatusResponse)

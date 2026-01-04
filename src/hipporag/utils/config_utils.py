@@ -20,7 +20,7 @@ class BaseConfig:
         metadata={"help": "Class name indicating which LLM model to use."}
     )
     llm_base_url: str = field(
-        default="http://localhost:11434/v1",
+        default="http://192.168.2.54:11434/v1",  # Mac Ollama server
         metadata={"help": "Base URL for the LLM model, if none, means using OPENAI service."}
     )
 
@@ -50,7 +50,7 @@ class BaseConfig:
         metadata={"help": "Fallback LLM (local Ollama) when API models fail."}
     )
     fallback_llm_base_url: str = field(
-        default="http://localhost:11434/v1",
+        default="http://192.168.2.54:11434/v1",  # Mac Ollama server
         metadata={"help": "Base URL for the fallback LLM (Ollama)."}
     )
     embedding_base_url: str = field(
@@ -204,8 +204,8 @@ class BaseConfig:
         metadata={"help": "The number of linked nodes at each retrieval step"}
     )
     retrieval_top_k: int = field(
-        default=200,
-        metadata={"help": "Retrieving k documents at each step"}
+        default=20,
+        metadata={"help": "Retrieving k documents at each step (reduced for faster reranking)"}
     )
     damping: float = field(
         default=0.5,

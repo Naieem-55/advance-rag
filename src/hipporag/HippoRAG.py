@@ -117,8 +117,9 @@ class HippoRAG:
         logger.debug(f"HippoRAG init with config:\n  {_print_config}\n")
 
         #LLM and embedding model specific working directories are created under every specified saving directories
-        llm_label = self.global_config.llm_name.replace("/", "_")
-        embedding_label = self.global_config.embedding_model_name.replace("/", "_")
+        # Sanitize model names for Windows compatibility (remove : and other invalid chars)
+        llm_label = self.global_config.llm_name.replace("/", "_").replace(":", "_")
+        embedding_label = self.global_config.embedding_model_name.replace("/", "_").replace(":", "_")
         self.working_dir = os.path.join(self.global_config.save_dir, f"{llm_label}_{embedding_label}")
 
         if not os.path.exists(self.working_dir):
@@ -1809,7 +1810,9 @@ class HippoRAG:
 
                 phrases_and_ids.add((phrase, phrase_id))
 
-        phrase_weights /= number_of_occurs
+        # Avoid division by zero - only divide where counts > 0
+        non_zero_mask = number_of_occurs > 0
+        phrase_weights[non_zero_mask] /= number_of_occurs[non_zero_mask]
 
         for phrase, phrase_id in phrases_and_ids:
             if phrase not in phrase_scores:
