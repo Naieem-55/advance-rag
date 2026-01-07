@@ -213,8 +213,9 @@ class HippoRAG:
         self.fact_reranker = self.reranker  # Reuse same model for facts
 
         # Answer verification to prevent hallucination
-        self.use_answer_verification = True
-        self.verification_confidence_threshold = 0.5
+        # Disabled - causes issues with Bengali responses (verification LLM returns Bengali instead of JSON)
+        self.use_answer_verification = False
+        self.verification_confidence_threshold = 0.3
 
         # Query expansion for better recall
         # Disabled by default - can distort multilingual queries
@@ -974,6 +975,28 @@ class HippoRAG:
                 prompt_user += f'Passage: {passage}\n\n'
             prompt_user += 'Question: ' + query_solution.question + '\nThought: '
 
+            # DEBUG: Log the constructed prompt and write to file for full inspection
+            logger.info(f"[QA DEBUG] Question: {query_solution.question}")
+            logger.info(f"[QA DEBUG] Number of passages: {len(retrieved_passages)}")
+            logger.info(f"[QA DEBUG] First passage preview: {retrieved_passages[0][:200] if retrieved_passages else 'No passages'}...")
+
+            # Write FULL prompt to debug file
+            import os
+            debug_file = os.path.join(self.global_config.save_dir, "qa_debug_prompt.txt")
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write(f"QUESTION: {query_solution.question}\n")
+                f.write("=" * 80 + "\n\n")
+                f.write(f"NUMBER OF PASSAGES: {len(retrieved_passages)}\n\n")
+                for i, passage in enumerate(retrieved_passages):
+                    f.write(f"--- PASSAGE {i+1} ---\n")
+                    f.write(passage + "\n\n")
+                f.write("=" * 80 + "\n")
+                f.write("FULL PROMPT_USER:\n")
+                f.write("=" * 80 + "\n")
+                f.write(prompt_user + "\n")
+            logger.info(f"[QA DEBUG] Full prompt written to: {debug_file}")
+
             if self.prompt_template_manager.is_template_name_valid(name=f'rag_qa_{self.global_config.dataset}'):
                 # find the corresponding prompt for this dataset
                 prompt_dataset_name = self.global_config.dataset
@@ -987,19 +1010,27 @@ class HippoRAG:
                 logger.debug(
                     f"Using MUSIQUE's prompt template as fallback.")
                 prompt_dataset_name = 'musique'
-            all_qa_messages.append(
-                self.prompt_template_manager.render(name=f'rag_qa_{prompt_dataset_name}', prompt_user=prompt_user))
+
+            logger.info(f"[QA DEBUG] Using template: rag_qa_{prompt_dataset_name}")
+            qa_messages = self.prompt_template_manager.render(name=f'rag_qa_{prompt_dataset_name}', prompt_user=prompt_user)
+            logger.info(f"[QA DEBUG] Number of messages in prompt: {len(qa_messages)}")
+            logger.info(f"[QA DEBUG] System prompt preview: {str(qa_messages[0])[:500]}...")
+            # Log the user prompt being sent
+            logger.info(f"[QA DEBUG] User prompt (last message): {str(qa_messages[-1])[:1000]}...")
+            all_qa_messages.append(qa_messages)
 
         # Use answer_llm for QA with fallback to fallback_llm
         all_qa_results = []
         for qa_messages in tqdm(all_qa_messages, desc="QA Reading"):
             try:
                 result = self.answer_llm.infer(qa_messages)
+                logger.info(f"[QA DEBUG] Raw LLM response: {result[0][:500] if result[0] else 'Empty'}...")
                 all_qa_results.append(result)
             except Exception as e:
                 logger.warning(f"Answer LLM failed: {e}. Using fallback LLM.")
                 try:
                     result = self.fallback_llm.infer(qa_messages)
+                    logger.info(f"[QA DEBUG] Fallback LLM response: {result[0][:500] if result[0] else 'Empty'}...")
                     all_qa_results.append(result)
                 except Exception as e2:
                     logger.error(f"Fallback LLM also failed: {e2}")
@@ -1012,14 +1043,28 @@ class HippoRAG:
         queries_solutions = []
         for query_solution_idx, query_solution in tqdm(enumerate(queries), desc="Extraction Answers from LLM Response"):
             response_content = all_response_message[query_solution_idx]
+            logger.info(f"[QA DEBUG] Full response content: {response_content}")
+
+            # Write FULL response to debug file
+            import os
+            debug_response_file = os.path.join(self.global_config.save_dir, "qa_debug_response.txt")
+            with open(debug_response_file, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write("FULL LLM RESPONSE:\n")
+                f.write("=" * 80 + "\n")
+                f.write(response_content + "\n")
+            logger.info(f"[QA DEBUG] Full response written to: {debug_response_file}")
             try:
                 pred_ans = response_content.split('Answer:')[1].strip()
+                logger.info(f"[QA DEBUG] Parsed answer: {pred_ans[:300]}...")
             except Exception as e:
                 logger.warning(f"Error in parsing the answer from the raw LLM QA inference response: {str(e)}!")
                 pred_ans = response_content
+                logger.info(f"[QA DEBUG] Using full response as answer (no 'Answer:' found)")
 
             # Answer verification to prevent hallucination
             if self.use_answer_verification:
+                logger.info(f"[QA DEBUG] Answer verification ENABLED with threshold={self.verification_confidence_threshold}")
                 retrieved_passages = query_solution.docs[:self.global_config.qa_top_k]
                 verified, confidence, evidence = self.verify_answer(
                     question=query_solution.question,
@@ -1030,11 +1075,14 @@ class HippoRAG:
                 # Store verification metadata
                 query_solution.verification_confidence = confidence
                 query_solution.verification_evidence = evidence
+                logger.info(f"[QA DEBUG] Verification result: verified={verified}, confidence={confidence:.2f}")
 
                 # Replace answer if not verified or low confidence
                 if not verified or confidence < self.verification_confidence_threshold:
                     logger.info(f"Answer not verified (confidence={confidence:.2f}). Replacing with fallback.")
                     pred_ans = "Information not found in the provided documents."
+            else:
+                logger.info(f"[QA DEBUG] Answer verification DISABLED")
 
             query_solution.answer = pred_ans
             queries_solutions.append(query_solution)

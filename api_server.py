@@ -100,6 +100,13 @@ UDVASH_SYSTEM_PROMPT = """উদ্ভাস AI Admin — Official AI Assistant 
 - For any questions only related with UDVASH routine or courses suggest to browse "https://udvash.com/HomePage" otherwise don't.
 - Don't give UDVASH website address or suggest to contact UDVASH if it is not related with UDVASH.
 
+## CRITICAL: Passage Priority Rules
+- Passages are provided in ORDER OF RELEVANCE (first passage = most relevant)
+- ALWAYS prioritize information from the FIRST passage over later passages
+- If multiple passages have conflicting information, trust the FIRST passage
+- Only use information from later passages if the first passage doesn't answer the question
+- Do NOT mix dates/information from different passages unless they are clearly about different topics
+
 ## Answer Size Control
 - Keep responses concise & specific.
 ### If an answer becomes large, automatically compress it into:
@@ -297,6 +304,307 @@ class DocumentsFromFolderRequest(BaseModel):
     folder_path: str = "documents"
 
 
+# University Query Expansion Map
+# Maps abbreviations/short forms to full names for better retrieval
+UNIVERSITY_EXPANSION_MAP = {
+    # Public Universities - Major
+    "du": "ঢাকা বিশ্ববিদ্যালয় Dhaka University DU ঢাবি",
+    "ঢাবি": "ঢাকা বিশ্ববিদ্যালয় Dhaka University DU",
+    "ru": "রাজশাহী বিশ্ববিদ্যালয় Rajshahi University RU রাবি",
+    "রাবি": "রাজশাহী বিশ্ববিদ্যালয় Rajshahi University RU",
+    "cu": "চট্টগ্রাম বিশ্ববিদ্যালয় Chittagong University CU চবি",
+    "চবি": "চট্টগ্রাম বিশ্ববিদ্যালয় Chittagong University CU",
+    "ku": "খুলনা বিশ্ববিদ্যালয় Khulna University KU খুবি",
+    "খুবি": "খুলনা বিশ্ববিদ্যালয় Khulna University KU",
+    "ju": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU জাবি",
+    "জাবি": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU",
+    "jnu": "জগন্নাথ বিশ্ববিদ্যালয় Jagannath University JNU জবি",
+    "জবি": "জগন্নাথ বিশ্ববিদ্যালয় Jagannath University JNU",
+
+    # Engineering Universities
+    "buet": "বাংলাদেশ প্রকৌশল বিশ্ববিদ্যালয় Bangladesh University of Engineering and Technology BUET বুয়েট",
+    "বুয়েট": "বাংলাদেশ প্রকৌশল বিশ্ববিদ্যালয় Bangladesh University of Engineering and Technology BUET",
+    "cuet": "চট্টগ্রাম প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় Chittagong University of Engineering and Technology CUET চুয়েট",
+    "চুয়েট": "চট্টগ্রাম প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় Chittagong University of Engineering and Technology CUET",
+    "kuet": "খুলনা প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় Khulna University of Engineering and Technology KUET কুয়েট",
+    "কুয়েট": "খুলনা প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় Khulna University of Engineering and Technology KUET",
+    "ruet": "রাজশাহী প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় Rajshahi University of Engineering and Technology RUET রুয়েট",
+    "রুয়েট": "রাজশাহী প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় Rajshahi University of Engineering and Technology RUET",
+    "duet": "ঢাকা প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় Dhaka University of Engineering and Technology DUET ডুয়েট",
+    "ckruet": "চুয়েট কুয়েট রুয়েট CUET KUET RUET চুকুরুয়েট",
+    "চুকুরুয়েট": "চুয়েট কুয়েট রুয়েট CUET KUET RUET",
+
+    # Science & Technology Universities
+    "sust": "শাহজালাল বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Shahjalal University of Science and Technology SUST সাস্ট",
+    "সাস্ট": "শাহজালাল বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Shahjalal University of Science and Technology SUST",
+    "pstu": "পটুয়াখালী বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Patuakhali Science and Technology University PSTU",
+    "nstu": "নোয়াখালী বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Noakhali Science and Technology University NSTU",
+    "just": "যশোর বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Jashore University of Science and Technology JUST",
+    "pust": "পাবনা বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Pabna University of Science and Technology PUST",
+    "hstu": "হাজী মোহাম্মদ দানেশ বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Hajee Mohammad Danesh Science and Technology University HSTU",
+    "mbstu": "মাওলানা ভাসানী বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Mawlana Bhashani Science and Technology University MBSTU",
+    "bsmrstu": "বঙ্গবন্ধু শেখ মুজিবুর রহমান বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Bangabandhu Sheikh Mujibur Rahman Science and Technology University BSMRSTU",
+
+    # Other Public Universities
+    "iu": "ইসলামী বিশ্ববিদ্যালয় Islamic University IU কুষ্টিয়া",
+    "bu": "বরিশাল বিশ্ববিদ্যালয় University of Barishal BU",
+    "cou": "কুমিল্লা বিশ্ববিদ্যালয় Comilla University COU কুবি",
+    "কুবি": "কুমিল্লা বিশ্ববিদ্যালয় Comilla University COU",
+    "brur": "বেগম রোকেয়া বিশ্ববিদ্যালয় Begum Rokeya University Rangpur BRUR",
+    "jkkniu": "জাতীয় কবি কাজী নজরুল ইসলাম বিশ্ববিদ্যালয় Jatiya Kabi Kazi Nazrul Islam University JKKNIU",
+    "bup": "বাংলাদেশ প্রফেশনালস বিশ্ববিদ্যালয় Bangladesh University of Professionals BUP",
+    "nu": "জাতীয় বিশ্ববিদ্যালয় National University NU",
+    "bou": "বাংলাদেশ উন্মুক্ত বিশ্ববিদ্যালয় Bangladesh Open University BOU",
+
+    # Agricultural Universities
+    "bau": "বাংলাদেশ কৃষি বিশ্ববিদ্যালয় Bangladesh Agricultural University BAU",
+    "sau": "সিলেট কৃষি বিশ্ববিদ্যালয় Sylhet Agricultural University SAU",
+    "bsmrau": "বঙ্গবন্ধু শেখ মুজিবুর রহমান কৃষি বিশ্ববিদ্যালয় Bangabandhu Sheikh Mujibur Rahman Agricultural University BSMRAU",
+    "krishi": "কৃষি গুচ্ছ Agriculture Cluster কৃষি বিশ্ববিদ্যালয়",
+    "কৃষি গুচ্ছ": "কৃষি Agriculture Cluster কৃষি বিশ্ববিদ্যালয়",
+    "agri": "agriculture এগ্রি এগ্রিকালচার কৃষি কৃষি গুচ্ছ কৃষি বিশ্ববিদ্যালয়",
+    "এগ্রি": "agriculture agri এগ্রিকালচার কৃষি কৃষি গুচ্ছ কৃষি বিশ্ববিদ্যালয়",
+    "এগ্রিকালচার": "agriculture agri এগ্রি কৃষি কৃষি গুচ্ছ কৃষি বিশ্ববিদ্যালয়",
+
+    # Guccho (Cluster) Universities
+    "guccho": "গুচ্ছ গুচ্ছভুক্ত বিশ্ববিদ্যালয় গুচ্ছ বিশ্ববিদ্যালয় GST Cluster University",
+    "gusso": "গুচ্ছ গুচ্ছভুক্ত বিশ্ববিদ্যালয় গুচ্ছ বিশ্ববিদ্যালয় GST guccho Cluster University",
+    "guscho": "গুচ্ছ গুচ্ছভুক্ত বিশ্ববিদ্যালয় গুচ্ছ বিশ্ববিদ্যালয় GST guccho Cluster University",
+    "গুচ্ছ": "guccho গুচ্ছভুক্ত বিশ্ববিদ্যালয় গুচ্ছ বিশ্ববিদ্যালয় GST Cluster University",
+    "গুচ্ছভুক্ত বিশ্ববিদ্যালয়": "গুচ্ছ GST guccho গুচ্ছ বিশ্ববিদ্যালয় Cluster University",
+    "গুচ্ছ বিশ্ববিদ্যালয়": "গুচ্ছ GST guccho গুচ্ছভুক্ত বিশ্ববিদ্যালয় Cluster University",
+
+    # Coaching Centers
+    "unmesh": "উন্মেষ কোচিং Coaching Center ভর্তি প্রস্তুতি",
+    "উন্মেষ": "unmesh কোচিং Coaching Center ভর্তি প্রস্তুতি",
+    "udvash": "উদ্ভাস কোচিং Coaching Center ভর্তি প্রস্তুতি",
+    "উদ্ভাস": "udvash কোচিং Coaching Center ভর্তি প্রস্তুতি",
+
+    # Medical
+    "medical": "মেডিকেল MBBS BDS মেডিকেল কলেজ Medical College",
+    "মেডিকেল": "Medical MBBS BDS মেডিকেল কলেজ Medical College",
+    "mbbs": "মেডিকেল Medical MBBS মেডিকেল কলেজ",
+    "bds": "ডেন্টাল Dental BDS ডেন্টাল কলেজ",
+
+    # Textile
+    "butex": "বাংলাদেশ টেক্সটাইল বিশ্ববিদ্যালয় Bangladesh University of Textiles BUTEX বুটেক্স",
+    "বুটেক্স": "বাংলাদেশ টেক্সটাইল বিশ্ববিদ্যালয় Bangladesh University of Textiles BUTEX",
+
+    # Maritime & Others
+    "bsmrmu": "বঙ্গবন্ধু শেখ মুজিবুর রহমান মেরিটাইম বিশ্ববিদ্যালয় Bangabandhu Sheikh Mujibur Rahman Maritime University BSMRMU",
+    "mist": "মিলিটারি ইনস্টিটিউট অব সায়েন্স অ্যান্ড টেকনোলজি Military Institute of Science and Technology MIST",
+    "aaub": "বাংলাদেশ এভিয়েশন অ্যান্ড অ্যারোস্পেস বিশ্ববিদ্যালয় Bangladesh Aviation and Aerospace University AAUB",
+
+    # Private Universities
+    "nsu": "নর্থ সাউথ বিশ্ববিদ্যালয় North South University NSU",
+    "bracu": "ব্র্যাক বিশ্ববিদ্যালয় BRAC University BRACU",
+    "iub": "ইন্ডিপেন্ডেন্ট বিশ্ববিদ্যালয় Independent University Bangladesh IUB",
+    "ewu": "ইস্ট ওয়েস্ট বিশ্ববিদ্যালয় East West University EWU",
+    "aiub": "আমেরিকান ইন্টারন্যাশনাল বিশ্ববিদ্যালয় American International University Bangladesh AIUB",
+    "uiu": "ইউনাইটেড ইন্টারন্যাশনাল বিশ্ববিদ্যালয় United International University UIU",
+    "diu": "ড্যাফোডিল ইন্টারন্যাশনাল বিশ্ববিদ্যালয় Daffodil International University DIU",
+    "aust": "আহসানউল্লাহ বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় Ahsanullah University of Science and Technology AUST",
+
+    # Common terms
+    "admission": "ভর্তি আবেদন admission application",
+    "ভর্তি": "admission ভর্তি আবেদন application",
+    "abedon": "আবেদন application admission ভর্তি",
+    "application": "আবেদন admission ভর্তি application",
+    "circular": "বিজ্ঞপ্তি circular নোটিশ notice",
+    "বিজ্ঞপ্তি": "circular notice বিজ্ঞপ্তি নোটিশ",
+    "fee": "ফি fee আবেদন ফি application fee",
+    "ফি": "fee ফি আবেদন ফি",
+    "deadline": "শেষ তারিখ deadline last date সময়সীমা",
+    "syllabus": "সিলেবাস syllabus পাঠ্যসূচি",
+    "সিলেবাস": "syllabus সিলেবাস পাঠ্যসূচি",
+    "result": "ফলাফল result রেজাল্ট",
+    "ফলাফল": "result ফলাফল রেজাল্ট",
+    "seat": "আসন seat সিট",
+    "আসন": "seat আসন সিট",
+
+    # Faculty/Unit expansions for JNU
+    "বিজ্ঞান অনুষদ": "বিজ্ঞান ও লাইফ এন্ড আর্থ সায়েন্স অনুষদ ইউনিট-A Unit-A Science Faculty",
+    "science faculty": "বিজ্ঞান ও লাইফ এন্ড আর্থ সায়েন্স অনুষদ ইউনিট-A Unit-A",
+    "unit-a": "বিজ্ঞান ও লাইফ এন্ড আর্থ সায়েন্স অনুষদ ইউনিট-A Science Faculty",
+    "ইউনিট-a": "বিজ্ঞান ও লাইফ এন্ড আর্থ সায়েন্স অনুষদ Unit-A Science Faculty",
+    "কলা অনুষদ": "কলা ও আইন অনুষদ ইউনিট-B Unit-B Arts Faculty Law",
+    "আইন অনুষদ": "কলা ও আইন অনুষদ ইউনিট-B Unit-B Law Faculty",
+    "unit-b": "কলা ও আইন অনুষদ ইউনিট-B Arts Law Faculty",
+    "বিজনেস অনুষদ": "বিজনেস স্টাডিজ অনুষদ ইউনিট-C Unit-C Business Faculty",
+    "unit-c": "বিজনেস স্টাডিজ অনুষদ ইউনিট-C Business Faculty",
+    "সামাজিক বিজ্ঞান অনুষদ": "সামাজিক বিজ্ঞান অনুষদ ইউনিট-D Unit-D Social Science Faculty",
+    "unit-d": "সামাজিক বিজ্ঞান অনুষদ ইউনিট-D Social Science Faculty",
+    "চারুকলা অনুষদ": "চারুকলা অনুষদ ইউনিট-E Unit-E Fine Arts Faculty",
+    "unit-e": "চারুকলা অনুষদ ইউনিট-E Fine Arts Faculty",
+
+    # Banglish to Bangla common terms
+    "bivag": "বিভাগ department",
+    "বিভাগ": "bivag department",
+    "poriborton": "পরিবর্তন change",
+    "পরিবর্তন": "poriborton change",
+    "koto": "কত how much how many",
+    "kto": "কত how much how many",
+    "কত": "koto kto how much how many",
+    "kmn": "কেমন how kemon",
+    "kemon": "কেমন how kmn",
+    "kmon": "কেমন how kmn kemon",
+    "কেমন": "kmn kemon kmon how",
+    "dao": "দাও give",
+    "deu": "দাও give dao",
+    "deo": "দাও give dao",
+    "dau": "দাও give dao",
+    "দাও": "dao deu deo dau give",
+    "dibe": "দিবে will give",
+    "দিবে": "dibe will give",
+
+    # Question words
+    "kobe": "কবে when",
+    "কবে": "kobe when",
+    "klk": "কালকে আগামীকাল tomorrow",
+    "kalke": "কালকে আগামীকাল tomorrow klk",
+    "kalk": "কালকে আগামীকাল tomorrow klk",
+    "কালকে": "klk kalke kalk আগামীকাল tomorrow",
+    "আগামীকাল": "klk kalke kalk কালকে tomorrow",
+    "kothay": "কোথায় where",
+    "kothae": "কোথায় where",
+    "কোথায়": "kothay kothae where",
+    "ki": "কি what",
+    "কি": "ki what",
+    "keno": "কেন why",
+    "কেন": "keno why",
+    "kivabe": "কিভাবে how",
+    "kibhabe": "কিভাবে how",
+    "কিভাবে": "kivabe kibhabe how",
+    "ke": "কে who",
+    "কে": "ke who",
+
+    # Common admission terms
+    "vorti": "ভর্তি admission",
+    "vortir": "ভর্তির admission",
+    "ভর্তি": "vorti admission",
+    "ভর্তির": "vortir admission",
+    "porikhha": "পরীক্ষা exam test",
+    "poriksha": "পরীক্ষা exam test",
+    "porikkha": "পরীক্ষা exam test",
+    "পরীক্ষা": "porikhha poriksha porikkha exam test",
+    "porikkhar": "পরীক্ষার exam",
+    "পরীক্ষার": "porikkhar exam",
+    "tarikh": "তারিখ date",
+    "tarik": "তারিখ date",
+    "তারিখ": "tarikh tarik date",
+    "somoy": "সময় time",
+    "সময়": "somoy time",
+    "suchi": "সূচি schedule",
+    "সূচি": "suchi schedule",
+    "somoysuchi": "সময়সূচি schedule timetable",
+    "সময়সূচি": "somoysuchi schedule timetable",
+
+    # Fees and costs
+    "fi": "ফি fee",
+    "fee": "ফি fee",
+    "ফি": "fi fee",
+    "khoroch": "খরচ cost expense",
+    "khorc": "খরচ cost expense",
+    "খরচ": "khoroch khorc cost expense",
+    "beton": "বেতন salary tuition",
+    "বেতন": "beton salary tuition",
+
+    # Results and marks
+    "fol": "ফল result",
+    "folafol": "ফলাফল result",
+    "ফল": "fol result",
+    "number": "নম্বর marks",
+    "nombor": "নম্বর marks",
+    "নম্বর": "number nombor marks",
+    "marks": "মার্কস নম্বর",
+    "মার্কস": "marks নম্বর",
+
+    # Seat and eligibility
+    "seat": "সিট আসন",
+    "সিট": "seat আসন",
+    "ason": "আসন seat",
+    "আসন": "ason seat সিট",
+    "joggyota": "যোগ্যতা eligibility qualification",
+    "joggota": "যোগ্যতা eligibility qualification",
+    "যোগ্যতা": "joggyota joggota eligibility qualification",
+
+    # Application related
+    "abedon": "আবেদন application apply",
+    "আবেদন": "abedon application apply",
+    "form": "ফরম application",
+    "ফরম": "form application",
+    "admit": "অ্যাডমিট এডমিট প্রবেশপত্র admit card",
+    "admid": "admit অ্যাডমিট এডমিট প্রবেশপত্র admit card",
+    "এডমিট": "admit admid অ্যাডমিট প্রবেশপত্র admit card",
+    "অ্যাডমিট": "admit admid এডমিট প্রবেশপত্র admit card",
+    "প্রবেশপত্র": "admit admid এডমিট অ্যাডমিট admit card",
+    "last": "শেষ last final deadline",
+    "sesh": "শেষ last final deadline",
+    "শেষ": "last sesh final deadline",
+
+    # Subject related
+    "bishoy": "বিষয় subject",
+    "bisoy": "বিষয় subject",
+    "বিষয়": "bishoy bisoy subject",
+    "sub": "সাবজেক্ট বিষয় subject",
+    "সাবজেক্ট": "sub বিষয় subject",
+
+    # Miscellaneous
+    "ache": "আছে is there have",
+    "ase": "আছে is there have",
+    "আছে": "ache ase is there have",
+    "nai": "নাই নেই not available",
+    "nei": "নেই নাই not available",
+    "নাই": "nai nei not available",
+    "নেই": "nei nai not available",
+    "lagbe": "লাগবে need required",
+    "লাগবে": "lagbe need required",
+    "dorkar": "দরকার need required",
+    "দরকার": "dorkar need required",
+    "bolo": "বলো tell say",
+    "bolen": "বলেন tell say",
+    "বলো": "bolo tell say",
+    "বলেন": "bolen tell say",
+    "jante": "জানতে want to know",
+    "জানতে": "jante want to know",
+    "chai": "চাই want need",
+    "চাই": "chai want need",
+}
+
+
+def expand_query(query: str) -> str:
+    """
+    Expand query by adding full university names for abbreviations.
+    This improves retrieval by matching both short forms and full names.
+    """
+    import re
+    expanded_terms = []
+    query_lower = query.lower()
+
+    # Check each word in query for expansion using word boundary matching
+    for abbrev, expansion in UNIVERSITY_EXPANSION_MAP.items():
+        abbrev_lower = abbrev.lower()
+        # Use word boundary regex to avoid substring matches (e.g., "ku" in "kuet")
+        # For English abbreviations, use strict word boundaries
+        # For Bangla, use simpler contains match (Bangla doesn't have same word boundary issues)
+        if re.search(r'[a-z]', abbrev_lower):
+            # English or mixed - use word boundary
+            pattern = r'\b' + re.escape(abbrev_lower) + r'\b'
+            if re.search(pattern, query_lower):
+                expanded_terms.append(expansion)
+        else:
+            # Pure Bangla - use contains match
+            if abbrev_lower in query_lower:
+                expanded_terms.append(expansion)
+
+    if expanded_terms:
+        # Add expansions to the original query
+        expansion_text = " ".join(set(expanded_terms))  # Remove duplicates
+        return f"{query} {expansion_text}"
+
+    return query
+
+
 def create_hipporag_config():
     """Create HippoRAG configuration based on multi-model settings."""
     from src.hipporag.utils.config_utils import BaseConfig
@@ -306,9 +614,10 @@ def create_hipporag_config():
         llm_base_url="http://192.168.2.54:11434/v1",  # Mac Ollama server
         embedding_model_name="Transformers/intfloat/multilingual-e5-large",
         save_dir="outputs",
-        retrieval_top_k=20,  # Reduced for faster cross-encoder reranking
-        qa_top_k=10,  # Feed top 10 docs to LLM
+        retrieval_top_k=50,  # Increased to find more relevant chunks across documents
+        qa_top_k=10,  # Feed top 10 docs to LLM after reranking
         dataset="udvash",  # Use Udvash AI Admin prompt template
+        passage_node_weight=0.5,  # Increased from 0.05 to give more weight to DPR
     )
 
     if USE_MULTI_MODEL:
@@ -365,24 +674,26 @@ def load_documents_from_folder(folder_path: str) -> List[str]:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # Split by page markers if they exist
-        if "=== Page" in content:
-            pages = content.split("=== Page")
+        # Split by page markers if they exist (support both === and --- formats)
+        if "=== Page" in content or "--- Page" in content:
+            # Use appropriate delimiter
+            delimiter = "=== Page" if "=== Page" in content else "--- Page"
+            pages = content.split(delimiter)
             for page in pages:
                 page = page.strip()
-                if page and not page.startswith("==="):
+                if page and not page.startswith("===") and not page.startswith("---"):
                     # Remove the page number line
                     lines = page.split("\n", 1)
                     if len(lines) > 1:
                         page_content = lines[1].strip()
                         if page_content:
-                            # Chunk if too large
-                            chunks = chunk_text(page_content, max_chars=2000)
+                            # Chunk if too large (increased to 3000 chars to prevent truncation)
+                            chunks = chunk_text(page_content, max_chars=3000)
                             documents.extend(chunks)
         else:
             # No page markers, chunk the whole content
             if content.strip():
-                chunks = chunk_text(content.strip(), max_chars=2000)
+                chunks = chunk_text(content.strip(), max_chars=3000)
                 documents.extend(chunks)
 
     print(f"Loaded {len(documents)} document chunks from {len(txt_files)} files")
@@ -502,9 +813,17 @@ async def ask_question(request: QuestionRequest):
     hipporag = get_hipporag()
 
     try:
+        # Expand query with university full names for better retrieval
+        # e.g., "JNU admission" → "JNU admission জগন্নাথ বিশ্ববিদ্যালয় Jagannath University..."
+        expanded_question = expand_query(request.question)
+
+        if expanded_question != request.question:
+            print(f"[Query Expansion] Original: {request.question}")
+            print(f"[Query Expansion] Expanded: {expanded_question[:200]}...")
+
         # Use custom instruction if provided, otherwise use default Udvash system prompt
         instruction = request.language_instruction if request.language_instruction else UDVASH_SYSTEM_PROMPT
-        query_with_instruction = f"{request.question}\n\n[System Instructions]\n{instruction}"
+        query_with_instruction = f"{expanded_question}\n\n[System Instructions]\n{instruction}"
 
         # Retry logic for empty responses
         max_retries = 3
@@ -536,19 +855,34 @@ async def ask_question(request: QuestionRequest):
             answer = NOT_FOUND_MESSAGE
 
         # Check if answer indicates "not found" - return empty references
-        not_found_indicators = [
+        # Be specific to avoid false positives - "নেই" alone is too common
+        not_found_indicators_en = [
             "not found", "information not found", "no information", "i don't have",
             "i do not have", "cannot find", "could not find", "no relevant",
-            "পাওয়া যায়নি", "তথ্য পাওয়া যায়নি", "no response content",
-            "নেই", "জানি না", "জানা নেই"  # Bangla: "don't have", "don't know"
+            "no response content"
         ]
-        is_not_found = any(indicator in answer.lower() for indicator in not_found_indicators)
+        # More specific Bangla phrases to avoid false positives
+        not_found_indicators_bn = [
+            "তথ্য পাওয়া যায়নি",  # Information not found
+            "তথ্য আমার কাছে নেই",  # I don't have the information
+            "সঠিক উত্তর দেওয়ার জন্য প্রয়োজনীয় তথ্য",  # Required information for correct answer
+            "জানা নেই",  # Don't know
+            "জানি না",  # Don't know
+            "খুঁজে পাওয়া যায়নি",  # Could not find
+        ]
+        answer_lower = answer.lower()
+        is_not_found = (
+            any(indicator in answer_lower for indicator in not_found_indicators_en) or
+            any(indicator in answer for indicator in not_found_indicators_bn)
+        )
 
         # Replace with Bengali not found message
         if is_not_found:
             answer = NOT_FOUND_MESSAGE
 
         # Extract references from docs and doc_scores
+        # Only include high-quality references (score > 0.5) to reduce hallucination
+        MIN_REFERENCE_SCORE = 0.5
         references = []
         if query_solution and not is_not_found:
             docs = query_solution.docs if query_solution.docs else []
@@ -556,11 +890,12 @@ async def ask_question(request: QuestionRequest):
 
             for i, doc in enumerate(docs[:5]):  # Top 5 references
                 score = float(scores[i]) if i < len(scores) else 0.0
-                # Include all references (removed score threshold)
-                references.append(Reference(
-                    content=doc[:500] + "..." if len(doc) > 500 else doc,
-                    score=score
-                ))
+                # Only include references above threshold
+                if score >= MIN_REFERENCE_SCORE:
+                    references.append(Reference(
+                        content=doc[:500] + "..." if len(doc) > 500 else doc,
+                        score=score
+                    ))
 
         return AnswerResponse(
             question=request.question,
@@ -580,7 +915,9 @@ async def debug_retrieval(request: QuestionRequest):
     hipporag = get_hipporag()
 
     try:
-        query_with_instruction = f"{request.question}\n\n({request.language_instruction})"
+        # Apply query expansion
+        expanded_question = expand_query(request.question)
+        query_with_instruction = f"{expanded_question}\n\n({request.language_instruction})"
 
         # Get full results
         query_solutions, response_messages, metadata_list = hipporag.rag_qa(queries=[query_with_instruction])
@@ -603,6 +940,7 @@ async def debug_retrieval(request: QuestionRequest):
 
             return {
                 "question": request.question,
+                "expanded_query": expanded_question if expanded_question != request.question else None,
                 "answer": qs.answer,
                 "total_retrieved": len(docs),
                 "retrieved_passages": retrieved,
@@ -775,6 +1113,106 @@ async def get_query_scores(query: str):
                 {"name": name, **data}
                 for name, data in sorted_nodes
             ]
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/debug-reranking")
+async def debug_reranking(request: QuestionRequest):
+    """Debug endpoint to examine cross-encoder reranking in detail."""
+    hipporag = get_hipporag()
+
+    try:
+        import numpy as np
+
+        if not hipporag.ready_to_retrieve:
+            hipporag.prepare_retrieval_objects()
+
+        # Expand query
+        expanded_query = expand_query(request.question)
+
+        # Get query embedding
+        hipporag.get_query_embeddings([expanded_query])
+
+        # Step 1: Get DPR results (dense passage retrieval)
+        dpr_doc_ids, dpr_doc_scores = hipporag.dense_passage_retrieval(expanded_query)
+
+        # Get top 50 candidates from DPR
+        num_candidates = min(50, len(dpr_doc_ids))
+        candidate_docs = []
+        candidate_info = []
+
+        for i in range(num_candidates):
+            doc_id = dpr_doc_ids[i]
+            content = hipporag.chunk_embedding_store.get_row(hipporag.passage_node_keys[doc_id])["content"]
+            candidate_docs.append(content)
+            candidate_info.append({
+                "dpr_rank": i + 1,
+                "dpr_score": float(dpr_doc_scores[i]),
+                "content_preview": content[:200] + "..." if len(content) > 200 else content,
+                "contains_query_terms": any(
+                    term in content.lower()
+                    for term in ["আবেদন", "সময়", "তারিখ", "ইউনিট-a", "বিজ্ঞান"]
+                )
+            })
+
+        # Step 2: Apply cross-encoder reranking
+        reranking_details = []
+        if hipporag.use_reranker and len(candidate_docs) > 1:
+            # Get raw cross-encoder scores for all candidates
+            pairs = [[expanded_query, doc] for doc in candidate_docs]
+            raw_scores = hipporag.reranker.model.predict(pairs)
+
+            # Normalize scores
+            def sigmoid(x):
+                return 1 / (1 + np.exp(-x))
+            normalized_scores = sigmoid(raw_scores)
+
+            # Add scores to candidate info
+            for i, info in enumerate(candidate_info):
+                info["cross_encoder_raw_score"] = float(raw_scores[i])
+                info["cross_encoder_normalized"] = float(normalized_scores[i])
+
+            # Sort by cross-encoder score
+            sorted_indices = np.argsort(normalized_scores)[::-1]
+
+            for rank, idx in enumerate(sorted_indices[:20]):  # Top 20 after reranking
+                reranking_details.append({
+                    "final_rank": rank + 1,
+                    "original_dpr_rank": candidate_info[idx]["dpr_rank"],
+                    "dpr_score": candidate_info[idx]["dpr_score"],
+                    "cross_encoder_score": float(normalized_scores[idx]),
+                    "content_preview": candidate_info[idx]["content_preview"],
+                    "contains_query_terms": candidate_info[idx]["contains_query_terms"]
+                })
+
+        # Find chunks containing key terms
+        target_chunks = []
+        for i, info in enumerate(candidate_info):
+            content = candidate_docs[i].lower()
+            if "২০/১১/২০২৫" in content or "আবেদনের সময়" in content or "ইউনিট-a" in content.lower():
+                target_chunks.append({
+                    "dpr_rank": info["dpr_rank"],
+                    "dpr_score": info["dpr_score"],
+                    "cross_encoder_score": info.get("cross_encoder_normalized", 0),
+                    "content": candidate_docs[i][:500]
+                })
+
+        return {
+            "query": request.question,
+            "expanded_query": expanded_query,
+            "total_dpr_candidates": num_candidates,
+            "reranker_model": "BAAI/bge-reranker-v2-m3",
+            "top_20_after_reranking": reranking_details,
+            "target_chunks_found": target_chunks,
+            "analysis": {
+                "issue": "Cross-encoder may not rank Bangla content correctly",
+                "recommendation": "Consider increasing qa_top_k or using multilingual reranker"
+            }
         }
 
     except Exception as e:
