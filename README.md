@@ -14,6 +14,18 @@
 
 ---
 
+## Architecture
+
+<p align="center">
+  <img src="images/HippoRag2 clean diagram.png" alt="HippoRAG Architecture" width="800"/>
+</p>
+
+<p align="center">
+  <img src="images/HippoRag2 diagram2.png" alt="HippoRAG Detailed Flow" width="800"/>
+</p>
+
+---
+
 ## Overview
 
 Advance RAG is an enhanced RAG system built on top of HippoRAG, designed for high-accuracy question answering with knowledge graph-based retrieval. It combines multiple retrieval strategies, cross-encoder reranking, and grounded QA to deliver precise, source-cited responses.
