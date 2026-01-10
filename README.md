@@ -31,16 +31,28 @@ Advance RAG is an enhanced RAG system built on top of HippoRAG, designed for hig
 ### Advanced Features
 | Feature | Description |
 |---------|-------------|
-| **Query Expansion** | Automatic query enhancement for better recall |
+| **Query Clarity Detection** | Automatically detects unclear/ambiguous queries |
+| **Query Rewrite (GPT-4o-mini)** | Rewrites unclear queries for better understanding |
+| **Context-Aware Query Expansion** | Auto-expands queries with relevant keywords (exam dates, fees, etc.) |
+| **Multi-Entity Query Decomposition** | Splits complex multi-entity queries for parallel retrieval |
 | **Answer Verification** | Response validation against source documents |
-| **Multilingual Support** | English and Bangla language support |
+| **Multilingual Support** | English and Bangla (including Banglish) language support |
 | **Improved NER** | Enhanced named entity recognition and triple extraction |
 
-### LLM & Embedding Support
+### LLM Stack
+| Purpose | Model | Location |
+|---------|-------|----------|
+| **Query Rewrite** | GPT-4o-mini | OpenAI API |
+| **Query Decomposition** | GPT-4o-mini | OpenAI API |
+| **Embeddings** | multilingual-e5-large | Local (GPU) |
+| **Reranking** | ms-marco-MiniLM-L-6-v2 | Local (CPU) |
+| **Answer Generation** | Qwen3-80B (configurable) | Ollama (Remote) |
+
+### Supported Models
 | Type | Supported Models |
 |------|------------------|
-| **LLM Backends** | OpenAI (GPT-4, GPT-4o), Google Gemini, Local models (vLLM) |
-| **Embedding Models** | NV-Embed-v2, GritLM, Gemini Embeddings, OpenAI Embeddings |
+| **LLM Backends** | OpenAI (GPT-4, GPT-4o-mini), Google Gemini, Ollama, Local models (vLLM) |
+| **Embedding Models** | multilingual-e5-large, NV-Embed-v2, GritLM, Gemini Embeddings, OpenAI Embeddings |
 
 ## Installation
 
@@ -119,15 +131,59 @@ python api_server.py
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/index` | Index new documents |
-| `POST` | `/ask` | Ask a question |
+| `POST` | `/index-folder` | Index all documents from a folder |
+| `POST` | `/ask` | Ask a question (with auto query rewrite & expansion) |
+| `POST` | `/debug-retrieval` | Debug endpoint to see retrieved passages |
 | `GET` | `/health` | Health check |
 
-### Example Request
+### Example Requests
 
 ```bash
+# Ask a question
 curl -X POST "http://localhost:8000/ask" \
   -H "Content-Type: application/json" \
-  -d '{"question": "What is the theory of relativity?"}'
+  -d '{"question": "JnU B unit exam kobe?"}'
+
+# Index documents from folder
+curl -X POST "http://localhost:8000/index-folder" \
+  -H "Content-Type: application/json" \
+  -d '{"folder_path": "documents"}'
+```
+
+### Query Processing Pipeline
+
+When you call `/ask`, the system automatically:
+
+1. **Query Clarity Check** - Detects if query is unclear/ambiguous
+2. **Query Rewrite** - Uses GPT-4o-mini to rewrite unclear queries
+3. **Entity Detection** - Identifies universities/entities in query
+4. **Query Expansion** - Adds context keywords (exam dates, fees, etc.)
+5. **Multi-Entity Decomposition** - Splits multi-entity queries for parallel retrieval
+6. **Retrieval & Reranking** - Hybrid search with cross-encoder reranking
+7. **Answer Generation** - Grounded QA with source citations
+
+```
+Example Terminal Output:
+================================================================================
+📥 /ask ENDPOINT - NEW REQUEST
+================================================================================
+❓ Question: "JnU B unit exam kobe?"
+--------------------------------------------------------------------------------
+🔍 STEP 0: Query Clarity Check
+   ✅ Query is clear, no rewrite needed
+--------------------------------------------------------------------------------
+🔍 STEP 1: Entity Detection
+   ⏱️  Time: 0.01s
+   🏷️  Detected 1 entities: [('jnu', 'জগন্নাথ বিশ্ববিদ্যালয়')]
+--------------------------------------------------------------------------------
+📝 STEP 2: Query Expansion
+   ✓ Expanded: "JnU B unit exam kobe? জগন্নাথ বিশ্ববিদ্যালয় ভর্তি পরীক্ষার সময়সূচি..."
+--------------------------------------------------------------------------------
+✅ SINGLE-ENTITY REQUEST COMPLETE
+   📝 Answer Length: 1250 chars
+   📚 References: 5
+   ⏱️  TOTAL TIME: 2 min 15 sec (135.42s)
+================================================================================
 ```
 
 ## Visualization
