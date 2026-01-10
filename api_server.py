@@ -5,6 +5,7 @@ Test your knowledge graph QA system via Postman or any HTTP client
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn
@@ -304,6 +305,492 @@ class DocumentsFromFolderRequest(BaseModel):
     folder_path: str = "documents"
 
 
+# University name patterns for post-retrieval filtering
+# Key: university abbreviation (lowercase), Value: list of patterns that MUST appear in document
+UNIVERSITY_FILTER_PATTERNS = {
+    # JNU (Jagannath) - documents must contain these, NOT JU patterns
+    "jnu": {
+        "must_contain": ["জগন্নাথ", "jagannath", "jnu", "জবি"],
+        "must_not_contain": ["জাহাঙ্গীরনগর", "jahangirnagar", "জাবি"],
+    },
+    # JU (Jahangirnagar) - documents must contain these, NOT JNU patterns
+    "ju": {
+        "must_contain": ["জাহাঙ্গীরনগর", "jahangirnagar", "জাবি"],
+        "must_not_contain": ["জগন্নাথ", "jagannath", "জবি"],
+    },
+    # KU (Khulna) vs KUET
+    "ku": {
+        "must_contain": ["খুলনা বিশ্ববিদ্যালয়", "khulna university", "খুবি"],
+        "must_not_contain": ["প্রকৌশল", "engineering", "কুয়েট", "kuet"],
+    },
+    "kuet": {
+        "must_contain": ["প্রকৌশল", "engineering", "কুয়েট", "kuet"],
+        "must_not_contain": [],
+    },
+    # RU (Rajshahi) vs RUET
+    "ru": {
+        "must_contain": ["রাজশাহী বিশ্ববিদ্যালয়", "rajshahi university", "রাবি"],
+        "must_not_contain": ["প্রকৌশল", "engineering", "রুয়েট", "ruet"],
+    },
+    "ruet": {
+        "must_contain": ["প্রকৌশল", "engineering", "রুয়েট", "ruet"],
+        "must_not_contain": [],
+    },
+    # CU (Chittagong) vs CUET
+    "cu": {
+        "must_contain": ["চট্টগ্রাম বিশ্ববিদ্যালয়", "chittagong university", "চবি"],
+        "must_not_contain": ["প্রকৌশল", "engineering", "চুয়েট", "cuet"],
+    },
+    "cuet": {
+        "must_contain": ["প্রকৌশল", "engineering", "চুয়েট", "cuet"],
+        "must_not_contain": [],
+    },
+}
+
+
+def get_queried_university(query: str) -> tuple:
+    """
+    Detect which specific university is being queried.
+
+    Returns:
+        tuple: (university_abbrev_or_None, num_universities_detected)
+        - If exactly one university: (abbrev, 1)
+        - If multiple universities: (None, count) - for comparative queries
+        - If no university detected: (None, 0)
+    """
+    import re
+    query_lower = query.lower()
+
+    # Check for specific university patterns (order matters - check longer patterns first)
+    university_patterns = [
+        (r'\bjnu\b', 'jnu'),
+        (r'\bju\b', 'ju'),
+        (r'জগন্নাথ', 'jnu'),
+        (r'জাহাঙ্গীরনগর', 'ju'),
+        (r'জবি', 'jnu'),  # জবি = JNU (Jagannath)
+        (r'জাবি', 'ju'),  # জাবি = JU (Jahangirnagar)
+        (r'\bkuet\b', 'kuet'),
+        (r'\bku\b', 'ku'),
+        (r'কুয়েট', 'kuet'),
+        (r'খুবি', 'ku'),
+        (r'\bruet\b', 'ruet'),
+        (r'\bru\b', 'ru'),
+        (r'রুয়েট', 'ruet'),
+        (r'রাবি', 'ru'),
+        (r'\bcuet\b', 'cuet'),
+        (r'\bcu\b', 'cu'),
+        (r'চুয়েট', 'cuet'),
+        (r'চবি', 'cu'),
+        # Additional patterns for other institutions
+        (r'\bmist\b', 'mist'),
+        (r'\bmedical\b', 'medical'),
+        (r'মেডিকেল', 'medical'),
+    ]
+
+    # Count how many different universities are mentioned
+    matched_universities = set()
+    for pattern, uni_abbrev in university_patterns:
+        if re.search(pattern, query_lower):
+            matched_universities.add(uni_abbrev)
+
+    num_unis = len(matched_universities)
+
+    # If multiple universities are mentioned, don't filter (comparative query)
+    if num_unis > 1:
+        return None, num_unis
+
+    # If exactly one university, return it for filtering
+    if num_unis == 1:
+        return matched_universities.pop(), 1
+
+    return None, 0
+
+
+def filter_documents_by_university(docs: list, scores: list, queried_uni: str) -> tuple:
+    """
+    Filter retrieved documents to only include those mentioning the queried university.
+    Returns filtered (docs, scores) tuple.
+    """
+    if queried_uni not in UNIVERSITY_FILTER_PATTERNS:
+        return docs, scores
+
+    filter_rules = UNIVERSITY_FILTER_PATTERNS[queried_uni]
+    must_contain = filter_rules.get("must_contain", [])
+    must_not_contain = filter_rules.get("must_not_contain", [])
+
+    filtered_docs = []
+    filtered_scores = []
+
+    for i, doc in enumerate(docs):
+        doc_lower = doc.lower()
+
+        # Check if document contains at least one required pattern
+        contains_required = any(pattern.lower() in doc_lower for pattern in must_contain) if must_contain else True
+
+        # Check if document contains any forbidden pattern
+        contains_forbidden = any(pattern.lower() in doc_lower for pattern in must_not_contain) if must_not_contain else False
+
+        if contains_required and not contains_forbidden:
+            filtered_docs.append(doc)
+            filtered_scores.append(scores[i] if i < len(scores) else 0.0)
+
+    # If filtering removed all documents, return original
+    if not filtered_docs:
+        return docs, scores
+    return filtered_docs, filtered_scores
+
+
+# ============================================================
+# ENTITY-AWARE QUERY DECOMPOSITION
+# For multi-institution queries, decompose into sub-queries
+# to avoid cross-entity dilution in retrieval
+# ============================================================
+
+def detect_entities_in_query(query: str) -> list:
+    """
+    Detect institution entities in query.
+    Returns list of (entity_abbrev, entity_full_name) tuples.
+    """
+    import re
+    query_lower = query.lower()
+
+    # Entity patterns with their canonical names
+    entity_patterns = [
+        # Universities
+        (r'\bjnu\b|জগন্নাথ|জবি', 'jnu', 'জগন্নাথ বিশ্ববিদ্যালয় (JNU)'),
+        (r'\bju\b|জাহাঙ্গীরনগর|জাবি', 'ju', 'জাহাঙ্গীরনগর বিশ্ববিদ্যালয় (JU)'),
+        (r'\bku\b|খুলনা বিশ্ববিদ্যালয়|খুবি', 'ku', 'খুলনা বিশ্ববিদ্যালয় (KU)'),
+        (r'\bru\b|রাজশাহী বিশ্ববিদ্যালয়|রাবি', 'ru', 'রাজশাহী বিশ্ববিদ্যালয় (RU)'),
+        (r'\bcu\b|চট্টগ্রাম বিশ্ববিদ্যালয়|চবি', 'cu', 'চট্টগ্রাম বিশ্ববিদ্যালয় (CU)'),
+        (r'\bdu\b|ঢাকা বিশ্ববিদ্যালয়|ঢাবি', 'du', 'ঢাকা বিশ্ববিদ্যালয় (DU)'),
+        (r'\bbu\b|বরিশাল বিশ্ববিদ্যালয়|ববি', 'bu', 'বরিশাল বিশ্ববিদ্যালয় (BU)'),
+        # Engineering Universities
+        (r'\bbuet\b|বুয়েট', 'buet', 'বুয়েট (BUET)'),
+        (r'\bkuet\b|কুয়েট', 'kuet', 'কুয়েট (KUET)'),
+        (r'\bruet\b|রুয়েট', 'ruet', 'রুয়েট (RUET)'),
+        (r'\bcuet\b|চুয়েট', 'cuet', 'চুয়েট (CUET)'),
+        # Special Institutions
+        (r'\bmist\b|মিলিটারি ইনস্টিটিউট', 'mist', 'MIST (মিলিটারি ইনস্টিটিউট অব সায়েন্স অ্যান্ড টেকনোলজি)'),
+        (r'\bmedical\b|মেডিকেল|mbbs|bds', 'medical', 'মেডিকেল (MBBS/BDS)'),
+        (r'\bsust\b|শাহজালাল|শাবি', 'sust', 'শাহজালাল বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় (SUST)'),
+        (r'\bbsmmu\b|বঙ্গবন্ধু শেখ মুজিব মেডিকেল', 'bsmmu', 'বঙ্গবন্ধু শেখ মুজিব মেডিকেল বিশ্ববিদ্যালয় (BSMMU)'),
+    ]
+
+    detected = []
+    for pattern, abbrev, full_name in entity_patterns:
+        if re.search(pattern, query_lower):
+            detected.append((abbrev, full_name))
+
+    return detected
+
+
+def decompose_query_with_gpt4o_mini(query: str, entities: list) -> list:
+    """
+    Use GPT-4o-mini to intelligently decompose a multi-entity query.
+    Fast, cheap (~$0.0001 per call), and accurate for query understanding.
+
+    Returns list of (entity_abbrev, entity_name, sub_query) tuples.
+    """
+    import openai
+    import os
+    import time
+
+    # Build entity list for the prompt
+    entity_info = "\n".join([f"- {abbrev}: {name}" for abbrev, name in entities])
+
+    decomposition_prompt = f"""You are a query decomposition assistant. Given a multi-entity query, split it into separate sub-queries for each entity.
+
+Original query: "{query}"
+
+Entities detected:
+{entity_info}
+
+Task: For each entity, create a focused sub-query that asks the same question but only for that specific entity. Keep the sub-query in the same language as the original.
+
+Output format (one per line, no extra text):
+ENTITY_ABBREV|SUB_QUERY
+
+Now decompose the query:"""
+
+    # ============================================================
+    # LOGGING: Query Decomposition with GPT-4o-mini
+    # ============================================================
+    print("\n" + "="*80)
+    print("🔀 QUERY DECOMPOSITION (GPT-4o-mini)")
+    print("="*80)
+    print(f"📥 Original Query: \"{query}\"")
+    print(f"🏷️  Detected Entities ({len(entities)}):")
+    for abbrev, name in entities:
+        print(f"    • {abbrev}: {name}")
+    print("-"*80)
+    print("📤 PROMPT TO GPT-4o-mini:")
+    print("-"*80)
+    print(decomposition_prompt)
+    print("-"*80)
+
+    try:
+        print("⏳ Calling GPT-4o-mini API...")
+        start_time = time.time()
+
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": decomposition_prompt}],
+            temperature=0,
+            max_tokens=500
+        )
+
+        elapsed_time = time.time() - start_time
+        result_text = response.choices[0].message.content.strip()
+
+        # Log the response
+        print(f"✅ GPT-4o-mini Response received ({elapsed_time:.2f}s)")
+        print("-"*80)
+        print("📥 GPT-4o-mini RAW RESPONSE:")
+        print("-"*80)
+        print(result_text)
+        print("-"*80)
+
+        # Parse the response
+        sub_queries = []
+        entity_map = {abbrev: name for abbrev, name in entities}
+
+        print("🔍 Parsing response...")
+        for line in result_text.split('\n'):
+            line = line.strip()
+            if '|' in line:
+                parts = line.split('|', 1)
+                if len(parts) == 2:
+                    abbrev = parts[0].strip().lower()
+                    sub_query = parts[1].strip()
+                    if abbrev in entity_map:
+                        sub_queries.append((abbrev, entity_map[abbrev], sub_query))
+                        print(f"    ✓ Parsed: {abbrev} → \"{sub_query}\"")
+
+        # If parsing failed, fall back to rule-based
+        if len(sub_queries) != len(entities):
+            print(f"⚠️  Parsing incomplete ({len(sub_queries)}/{len(entities)}), using rule-based fallback")
+            print("="*80 + "\n")
+            return decompose_query_rule_based(query, entities)
+
+        print("-"*80)
+        print(f"✅ DECOMPOSED INTO {len(sub_queries)} SUB-QUERIES:")
+        for i, (abbrev, name, sub_q) in enumerate(sub_queries, 1):
+            print(f"    [{i}] {abbrev} ({name})")
+            print(f"        → \"{sub_q}\"")
+        print("="*80 + "\n")
+
+        return sub_queries
+
+    except Exception as e:
+        print(f"❌ GPT-4o-mini API Error: {e}")
+        print("⚠️  Falling back to rule-based decomposition")
+        print("="*80 + "\n")
+        return decompose_query_rule_based(query, entities)
+
+
+def decompose_query_rule_based(query: str, entities: list) -> list:
+    """
+    Rule-based fallback for query decomposition.
+    Used when GPT-4o-mini is unavailable or fails.
+    """
+    import re
+
+    query_lower = query.lower()
+
+    # Common question patterns
+    question_patterns = [
+        r'admit\s*card\s*(?:কবে|কখন|when)',
+        r'(?:কবে|কখন|when).*admit\s*card',
+        r'প্রবেশপত্র\s*(?:কবে|কখন)',
+        r'(?:আবেদন|application)\s*(?:ফি|fee)\s*কত',
+        r'(?:ফি|fee)\s*কত',
+        r'(?:পরীক্ষা|exam)\s*(?:তারিখ|date|কবে)',
+        r'(?:শেষ|last)\s*(?:তারিখ|date)',
+        r'(?:আবেদন|application)\s*(?:শুরু|শেষ)',
+    ]
+
+    # Try to identify the question type
+    question_part = None
+    for pattern in question_patterns:
+        match = re.search(pattern, query_lower)
+        if match:
+            question_part = match.group(0)
+            break
+
+    # If no pattern matched, use the original query minus entity names
+    if not question_part:
+        cleaned_query = query
+        for abbrev, full_name in entities:
+            cleaned_query = re.sub(rf'\b{abbrev}\b', '', cleaned_query, flags=re.IGNORECASE)
+        cleaned_query = re.sub(r'[,،]\s*', ' ', cleaned_query).strip()
+        question_part = cleaned_query if cleaned_query else query
+
+    # Generate sub-queries
+    sub_queries = []
+    for abbrev, full_name in entities:
+        sub_query = f"{full_name} {question_part}"
+        sub_queries.append((abbrev, full_name, sub_query))
+
+    return sub_queries
+
+
+def decompose_multi_entity_query(query: str, entities: list) -> list:
+    """
+    Decompose a multi-entity query into sub-queries.
+    Uses GPT-4o-mini for intelligent decomposition, with rule-based fallback.
+
+    Returns list of (entity_abbrev, entity_name, sub_query) tuples.
+    """
+    import os
+
+    # Use GPT-4o-mini if OpenAI API key is available
+    if os.getenv("OPENAI_API_KEY"):
+        return decompose_query_with_gpt4o_mini(query, entities)
+    else:
+        print("[Query Decomposition] No OpenAI API key, using rule-based decomposition")
+        return decompose_query_rule_based(query, entities)
+
+
+async def run_decomposed_retrieval(hipporag, sub_queries: list, original_question: str) -> dict:
+    """
+    Run retrieval independently for each sub-query and collect results.
+
+    Returns dict: {entity_abbrev: {'docs': [...], 'scores': [...], 'answer': str}}
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import asyncio
+
+    results = {}
+
+    for abbrev, full_name, sub_query in sub_queries:
+        # Special handling for medical admit card queries
+        # The medical document uses specific terms that need to be included
+        if abbrev == 'medical' and ('admit' in sub_query.lower() or 'প্রবেশ' in sub_query or 'এডমিট' in sub_query):
+            sub_query = sub_query + " এমবিবিএস বিডিএস ভর্তি পরীক্ষা কার্যক্রম প্রবেশ পত্র ডাউনলোড dgme"
+
+        # Expand the sub-query
+        expanded_query = expand_query(sub_query)
+        print(f"      📝 Sub-query: \"{sub_query}\"")
+        if expanded_query != sub_query:
+            print(f"      ✓ Expanded: \"{expanded_query[:150]}...\"")
+
+        # Run retrieval
+        if not hipporag.ready_to_retrieve:
+            hipporag.prepare_retrieval_objects()
+
+        query_solutions_retrieved = hipporag.retrieve(queries=[expanded_query])
+
+        if query_solutions_retrieved and len(query_solutions_retrieved) > 0:
+            qs = query_solutions_retrieved[0]
+            docs = qs.docs if qs.docs else []
+            scores = list(qs.doc_scores) if qs.doc_scores is not None else []
+
+            # Apply entity-specific filtering
+            if abbrev in UNIVERSITY_FILTER_PATTERNS:
+                docs, scores = filter_documents_by_university(docs, scores, abbrev)
+
+            # Special filtering for medical documents
+            if abbrev == 'medical':
+                medical_docs = []
+                medical_scores = []
+                medical_keywords = ['মেডিকেল', 'medical', 'mbbs', 'bds', 'এমবিবিএস', 'বিডিএস', 'dgme', 'স্বাস্থ্য শিক্ষা']
+                for i, doc in enumerate(docs):
+                    doc_lower = doc.lower()
+                    if any(kw.lower() in doc_lower for kw in medical_keywords):
+                        medical_docs.append(doc)
+                        medical_scores.append(scores[i] if i < len(scores) else 0.0)
+                if medical_docs:
+                    docs = medical_docs
+                    scores = medical_scores
+
+            results[abbrev] = {
+                'entity_name': full_name,
+                'docs': docs[:10],  # Top 10 per entity
+                'scores': scores[:10],
+                'sub_query': sub_query,
+            }
+        else:
+            results[abbrev] = {
+                'entity_name': full_name,
+                'docs': [],
+                'scores': [],
+                'sub_query': sub_query,
+            }
+
+    return results
+
+
+def build_slot_aware_answer(hipporag, original_question: str, entity_results: dict, question_type: str = "admit_card") -> str:
+    """
+    Build a structured answer by synthesizing results from each entity.
+    Uses slot-aware logic: if info found → show it, else → "নির্দিষ্ট তথ্য নেই"
+    """
+
+    # Combine all docs for LLM context, grouped by entity
+    combined_context = []
+    for abbrev, data in entity_results.items():
+        entity_name = data['entity_name']
+        docs = data['docs']
+        if docs:
+            combined_context.append(f"\n### {entity_name} সম্পর্কিত তথ্য:\n")
+            for i, doc in enumerate(docs[:5]):  # Top 5 per entity
+                combined_context.append(f"[{entity_name} Doc {i+1}]: {doc[:800]}\n")
+
+    if not combined_context:
+        return "দুঃখিত, আপনার প্রশ্নের সঠিক উত্তর দেওয়ার জন্য প্রয়োজনীয় তথ্য আমার কাছে নেই।"
+
+    # Build the prompt for slot-aware synthesis
+    entity_list = ", ".join([data['entity_name'] for data in entity_results.values()])
+
+    synthesis_prompt = f"""নিচে বিভিন্ন প্রতিষ্ঠানের তথ্য দেওয়া হলো। প্রশ্ন: "{original_question}"
+
+{''.join(combined_context)}
+
+উপরের তথ্যের ভিত্তিতে নিচের প্রতিষ্ঠানগুলোর জন্য টেবিল আকারে উত্তর দিন:
+{entity_list}
+
+🚫 কঠোর নিয়ম (অবশ্যই মানতে হবে):
+1. শুধুমাত্র উপরের প্যাসেজে হুবহু যে তারিখ/তথ্য আছে সেটাই লিখুন
+2. কোনো তারিখ বা তথ্য অনুমান করে তৈরি করবেন না - এটি সম্পূর্ণ নিষিদ্ধ
+3. প্যাসেজে "প্রবেশ পত্র" বা "Admit Card" এর তারিখ না থাকলে অবশ্যই লিখুন: "নির্দিষ্ট তথ্য নেই"
+4. একটি প্রতিষ্ঠানের তথ্য দিয়ে অন্য প্রতিষ্ঠানের উত্তর দেওয়া যাবে না
+5. ভুল তথ্য দেওয়ার চেয়ে "তথ্য পাওয়া যায়নি" লেখা অনেক ভালো
+
+⚠️ মনে রাখুন: মিথ্যা তারিখ দিলে শিক্ষার্থীরা ক্ষতিগ্রস্ত হবে।
+"""
+
+    # Use the QA LLM to generate the synthesized answer
+    # Get the answer LLM from hipporag
+    llm = None
+    if hasattr(hipporag, 'answer_llm') and hipporag.answer_llm:
+        llm = hipporag.answer_llm
+    elif hasattr(hipporag, 'llm') and hipporag.llm:
+        llm = hipporag.llm
+
+    if llm is None:
+        return "দুঃখিত, উত্তর তৈরি করতে সমস্যা হয়েছে।"
+
+    try:
+        # CacheOpenAI uses infer() method, not chat()
+        # infer() takes a list of message dicts and returns (response_message, metadata, cache_hit)
+        messages = [{"role": "user", "content": synthesis_prompt}]
+        result = llm.infer(messages)
+
+        # Handle tuple response: (response_message, metadata, cache_hit)
+        if isinstance(result, tuple):
+            response_message = result[0]
+        else:
+            response_message = result
+
+        if response_message:
+            return response_message
+    except Exception as e:
+        print(f"[Slot-Aware Synthesis] Error: {e}")
+
+    return "দুঃখিত, উত্তর তৈরি করতে সমস্যা হয়েছে।"
+
+
 # University Query Expansion Map
 # Maps abbreviations/short forms to full names for better retrieval
 UNIVERSITY_EXPANSION_MAP = {
@@ -316,8 +803,12 @@ UNIVERSITY_EXPANSION_MAP = {
     "চবি": "চট্টগ্রাম বিশ্ববিদ্যালয় Chittagong University CU",
     "ku": "খুলনা বিশ্ববিদ্যালয় Khulna University KU খুবি",
     "খুবি": "খুলনা বিশ্ববিদ্যালয় Khulna University KU",
-    "ju": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU জাবি",
-    "জাবি": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU",
+    "ju": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU জাবি jahangirnagar jahangirnogor",
+    "jahangirnagar": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU জাবি",
+    "jahangirnogor": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU জাবি jahangirnagar",
+    "জাবি": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU jahangirnagar",
+    "জাহাঙ্গীরনগর": "জাহাঙ্গীরনগর বিশ্ববিদ্যালয় Jahangirnagar University JU জাবি",
+    "জাহাঙ্গীরনগর বিশ্ববিদ্যালয়": "Jahangirnagar University JU জাবি jahangirnagar",
     "jnu": "জগন্নাথ বিশ্ববিদ্যালয় Jagannath University JNU জবি",
     "জবি": "জগন্নাথ বিশ্ববিদ্যালয় Jagannath University JNU",
 
@@ -381,9 +872,11 @@ UNIVERSITY_EXPANSION_MAP = {
     "উদ্ভাস": "udvash কোচিং Coaching Center ভর্তি প্রস্তুতি",
 
     # Medical
-    "medical": "মেডিকেল MBBS BDS মেডিকেল কলেজ Medical College",
-    "মেডিকেল": "Medical MBBS BDS মেডিকেল কলেজ Medical College",
-    "mbbs": "মেডিকেল Medical MBBS মেডিকেল কলেজ",
+    "medical": "মেডিকেল MBBS BDS এমবিবিএস বিডিএস মেডিকেল কলেজ Medical College dgme স্বাস্থ্য শিক্ষা ভর্তি পরীক্ষা",
+    "মেডিকেল": "Medical MBBS BDS এমবিবিএস বিডিএস মেডিকেল কলেজ Medical College dgme স্বাস্থ্য শিক্ষা",
+    "mbbs": "মেডিকেল Medical MBBS এমবিবিএস মেডিকেল কলেজ dgme",
+    "এমবিবিএস": "মেডিকেল Medical MBBS মেডিকেল কলেজ dgme বিডিএস",
+    "বিডিএস": "মেডিকেল Medical BDS ডেন্টাল কলেজ dgme এমবিবিএস",
     "bds": "ডেন্টাল Dental BDS ডেন্টাল কলেজ",
 
     # Textile
@@ -529,15 +1022,18 @@ UNIVERSITY_EXPANSION_MAP = {
     "যোগ্যতা": "joggyota joggota eligibility qualification",
 
     # Application related
-    "abedon": "আবেদন application apply",
-    "আবেদন": "abedon application apply",
+    "abedon": "আবেদন আবেদনের application apply",
+    "abedoner": "আবেদনের আবেদন application",
+    "আবেদন": "abedon abedoner application apply",
+    "আবেদনের": "abedoner abedon application",
     "form": "ফরম application",
     "ফরম": "form application",
-    "admit": "অ্যাডমিট এডমিট প্রবেশপত্র admit card",
-    "admid": "admit অ্যাডমিট এডমিট প্রবেশপত্র admit card",
-    "এডমিট": "admit admid অ্যাডমিট প্রবেশপত্র admit card",
-    "অ্যাডমিট": "admit admid এডমিট প্রবেশপত্র admit card",
-    "প্রবেশপত্র": "admit admid এডমিট অ্যাডমিট admit card",
+    "admit": "অ্যাডমিট এডমিট প্রবেশপত্র প্রবেশ পত্র admit card ডাউনলোড",
+    "admid": "admit অ্যাডমিট এডমিট প্রবেশপত্র প্রবেশ পত্র admit card ডাউনলোড",
+    "এডমিট": "admit admid অ্যাডমিট প্রবেশপত্র প্রবেশ পত্র admit card ডাউনলোড",
+    "অ্যাডমিট": "admit admid এডমিট প্রবেশপত্র প্রবেশ পত্র admit card ডাউনলোড",
+    "প্রবেশপত্র": "admit admid এডমিট অ্যাডমিট প্রবেশ পত্র admit card ডাউনলোড",
+    "প্রবেশ পত্র": "admit admid এডমিট অ্যাডমিট প্রবেশপত্র admit card ডাউনলোড",
     "last": "শেষ last final deadline",
     "sesh": "শেষ last final deadline",
     "শেষ": "last sesh final deadline",
@@ -574,8 +1070,8 @@ UNIVERSITY_EXPANSION_MAP = {
 
 def expand_query(query: str) -> str:
     """
-    Expand query by adding full university names for abbreviations.
-    This improves retrieval by matching both short forms and full names.
+    Expand query by adding full university names for abbreviations
+    and context-specific keywords for better retrieval.
     """
     import re
     expanded_terms = []
@@ -597,12 +1093,164 @@ def expand_query(query: str) -> str:
             if abbrev_lower in query_lower:
                 expanded_terms.append(expansion)
 
+    # Add exam schedule keywords when query asks about exam dates
+    exam_date_keywords = ['exam', 'kobe', 'kokhon', 'কবে', 'কখন', 'তারিখ', 'date', 'schedule', 'সময়সূচি']
+    if any(kw in query_lower for kw in exam_date_keywords):
+        expanded_terms.append("ভর্তি পরীক্ষার সময়সূচি তারিখ পরীক্ষা কবে হবে")
+
+    # Add fee keywords when query asks about fees
+    fee_keywords = ['fee', 'fees', 'ফি', 'কত', 'টাকা', 'খরচ', 'cost', 'price', 'আবেদন ফি']
+    if any(kw in query_lower for kw in fee_keywords):
+        expanded_terms.append("আবেদন ফি টাকা খরচ")
+
+    # Add admit card keywords when query asks about admit card
+    admit_keywords = ['admit', 'card', 'প্রবেশপত্র', 'এডমিট', 'কার্ড', 'download']
+    if any(kw in query_lower for kw in admit_keywords):
+        expanded_terms.append("প্রবেশপত্র ডাউনলোড admit card")
+
+    # Add application keywords when query asks about application process
+    apply_keywords = ['apply', 'আবেদন', 'application', 'কিভাবে', 'প্রক্রিয়া', 'process']
+    if any(kw in query_lower for kw in apply_keywords):
+        expanded_terms.append("আবেদন প্রক্রিয়া করণীয়")
+
     if expanded_terms:
         # Add expansions to the original query
         expansion_text = " ".join(set(expanded_terms))  # Remove duplicates
         return f"{query} {expansion_text}"
 
     return query
+
+
+def is_query_unclear(query: str) -> bool:
+    """
+    Detect if a query is unclear/ambiguous and needs rewriting.
+
+    Unclear queries include:
+    - Too short (less than 3 words)
+    - Missing context (e.g., "eta ki?", "bolo", "janao")
+    - Banglish/romanized text that's hard to understand
+    - Vague questions without specific entity or topic
+    """
+    import re
+
+    query_lower = query.lower().strip()
+    words = query_lower.split()
+
+    # Too short
+    if len(words) < 3:
+        return True
+
+    # Vague/unclear patterns (Banglish and Bangla)
+    unclear_patterns = [
+        r'^(eta|ata|ota|eita)\s+(ki|kি|কি)\??$',  # "eta ki?"
+        r'^(bolo|bolen|bolो|বলো|বলেন)\s*$',  # just "bolo"
+        r'^(janao|janাo|জানাও)\s*$',  # just "janao"
+        r'^(ki|কি)\s+(hobe|hবে|হবে)\??$',  # "ki hobe?"
+        r'^(kمn|kemon|কেমন)\s*\??$',  # just "kemon?"
+        r'^(ar|আর)\s+(ki|কি)\??$',  # "ar ki?"
+        r'^\?\s*$',  # just "?"
+        r'^(hmm|hm|umm|ah|oh)\s*$',  # filler words
+    ]
+
+    for pattern in unclear_patterns:
+        if re.match(pattern, query_lower):
+            return True
+
+    # Check if query has no meaningful nouns/entities (just pronouns/fillers)
+    filler_words = {'eta', 'ota', 'ki', 'কি', 'ta', 'টা', 'gula', 'গুলা', 'ar', 'আর', 'o', 'ও'}
+    meaningful_words = [w for w in words if w not in filler_words and len(w) > 2]
+    if len(meaningful_words) < 2:
+        return True
+
+    return False
+
+
+def rewrite_query_with_gpt4o_mini(query: str, context: str = None) -> str:
+    """
+    Rewrite an unclear query using GPT-4o-mini to make it clearer and more specific.
+
+    Args:
+        query: The original unclear query
+        context: Optional context from previous conversation
+
+    Returns:
+        Rewritten query that's clearer and more searchable
+    """
+    import openai
+    import os
+    import time
+
+    rewrite_prompt = f"""You are a query rewriting assistant for a Bangladesh university admission information system.
+
+Original query: "{query}"
+{f'Previous context: {context}' if context else ''}
+
+The query seems unclear or incomplete. Rewrite it to be:
+1. Clear and specific
+2. In proper Bengali or English (not Banglish)
+3. Include the likely topic (admission, fees, dates, etc.)
+4. Searchable in a knowledge base
+
+If the query is about admission-related topics, assume it's asking about:
+- Admission test dates/schedules
+- Application fees
+- Admit card download
+- Results
+- Eligibility criteria
+
+Output ONLY the rewritten query, nothing else.
+If you cannot understand the query at all, output: UNCLEAR
+
+Examples:
+- "eta ki?" → "এটি কি সম্পর্কে জানতে চাইছেন? ভর্তি পরীক্ষা, ফি, নাকি তারিখ?"
+- "du te kobe" → "ঢাকা বিশ্ববিদ্যালয়ের ভর্তি পরীক্ষা কবে হবে?"
+- "fee koto" → "ভর্তি পরীক্ষার আবেদন ফি কত?"
+- "admit card" → "ভর্তি পরীক্ষার প্রবেশপত্র কবে পাওয়া যাবে?"
+
+Rewrite the query:"""
+
+    # ============================================================
+    # LOGGING: Query Rewrite with GPT-4o-mini
+    # ============================================================
+    print("\n" + "="*80)
+    print("✏️  QUERY REWRITE (GPT-4o-mini)")
+    print("="*80)
+    print(f"📥 Original Query: \"{query}\"")
+    print(f"❓ Reason: Query detected as unclear/ambiguous")
+    print("-"*80)
+
+    try:
+        print("⏳ Calling GPT-4o-mini for rewrite...")
+        start_time = time.time()
+
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": rewrite_prompt}],
+            temperature=0.3,
+            max_tokens=200
+        )
+
+        elapsed_time = time.time() - start_time
+        rewritten_query = response.choices[0].message.content.strip()
+
+        print(f"✅ GPT-4o-mini Response ({elapsed_time:.2f}s)")
+        print("-"*80)
+        print(f"📤 Rewritten Query: \"{rewritten_query}\"")
+        print("="*80 + "\n")
+
+        # If GPT couldn't understand, return original
+        if rewritten_query == "UNCLEAR" or not rewritten_query:
+            print("⚠️  Could not rewrite, using original query")
+            return query
+
+        return rewritten_query
+
+    except Exception as e:
+        print(f"❌ GPT-4o-mini Error: {e}")
+        print("⚠️  Using original query")
+        print("="*80 + "\n")
+        return query
 
 
 def create_hipporag_config():
@@ -810,16 +1458,134 @@ async def index_from_folder(request: DocumentsFromFolderRequest):
 @app.post("/ask", response_model=AnswerResponse)
 async def ask_question(request: QuestionRequest):
     """Ask a question and get an answer with references."""
+    import time
+    request_start_time = time.time()
+
     hipporag = get_hipporag()
 
     try:
+        # ============================================================
+        # LOGGING: Request Start
+        # ============================================================
+        print("\n" + "="*80)
+        print("📥 /ask ENDPOINT - NEW REQUEST")
+        print("="*80)
+        print(f"❓ Question: \"{request.question}\"")
+        print("-"*80)
+
+        # ============================================================
+        # STEP 0: Query Clarity Check & Rewrite (if needed)
+        # ============================================================
+        print("🔍 STEP 0: Query Clarity Check")
+        original_question = request.question
+        working_question = request.question
+
+        if is_query_unclear(request.question):
+            print(f"   ⚠️  Query detected as UNCLEAR")
+            print(f"   🔄 Rewriting query with GPT-4o-mini...")
+            rewrite_start = time.time()
+            working_question = rewrite_query_with_gpt4o_mini(request.question)
+            print(f"   ⏱️  Rewrite Time: {time.time() - rewrite_start:.2f}s")
+            print(f"   ✅ Rewritten: \"{working_question}\"")
+        else:
+            print(f"   ✅ Query is clear, no rewrite needed")
+        print("-"*80)
+
+        # ============================================================
+        # STEP 1: Detect entities and decide on retrieval strategy
+        # ============================================================
+        print("🔍 STEP 1: Entity Detection")
+        entity_start = time.time()
+        detected_entities = detect_entities_in_query(working_question)
+        num_entities = len(detected_entities)
+        print(f"   ⏱️  Time: {time.time() - entity_start:.2f}s")
+        print(f"   🏷️  Detected {num_entities} entities: {detected_entities}")
+        print("-"*80)
+
+        # ============================================================
+        # MULTI-ENTITY PATH: Use decomposed retrieval
+        # ============================================================
+        if num_entities > 1:
+            print("🔀 MULTI-ENTITY PATH TRIGGERED (num_entities > 1)")
+            print("-"*80)
+
+            # Step 2: Decompose query into sub-queries
+            print("📋 STEP 2: Query Decomposition")
+            decompose_start = time.time()
+            sub_queries = decompose_multi_entity_query(working_question, detected_entities)
+            print(f"   ⏱️  Decomposition Time: {time.time() - decompose_start:.2f}s")
+
+            # Step 3: Run retrieval independently for each entity
+            print("-"*80)
+            print("🔍 STEP 3: Per-Entity Retrieval")
+            retrieval_start = time.time()
+            entity_results = await run_decomposed_retrieval(hipporag, sub_queries, working_question)
+            print(f"   ⏱️  Retrieval Time: {time.time() - retrieval_start:.2f}s")
+            for abbrev, data in entity_results.items():
+                print(f"   📄 {abbrev}: {len(data['docs'])} docs retrieved")
+
+            # Step 4: Build slot-aware synthesized answer
+            print("-"*80)
+            print("🤖 STEP 4: Answer Generation (Qwen3-80B)")
+            answer_start = time.time()
+            answer = build_slot_aware_answer(hipporag, working_question, entity_results)
+            print(f"   ⏱️  Answer Generation Time: {time.time() - answer_start:.2f}s")
+
+            # Collect references from all entities
+            all_docs = []
+            all_scores = []
+            for abbrev, data in entity_results.items():
+                for i, doc in enumerate(data['docs'][:3]):  # Top 3 per entity
+                    all_docs.append(doc)
+                    all_scores.append(data['scores'][i] if i < len(data['scores']) else 0.5)
+
+            # Build references
+            MIN_REFERENCE_SCORE = 0.4
+            references = []
+            for i, doc in enumerate(all_docs[:10]):  # Max 10 references
+                score = float(all_scores[i]) if i < len(all_scores) else 0.0
+                if score >= MIN_REFERENCE_SCORE:
+                    references.append(Reference(
+                        content=doc[:500] + "..." if len(doc) > 500 else doc,
+                        score=score
+                    ))
+
+            # Final logging
+            total_time = time.time() - request_start_time
+            print("-"*80)
+            print("✅ MULTI-ENTITY REQUEST COMPLETE")
+            if original_question != working_question:
+                print(f"   🔄 Query Rewritten: \"{original_question}\" → \"{working_question}\"")
+            print(f"   📝 Answer Length: {len(answer)} chars")
+            print(f"   📚 References: {len(references)}")
+            mins, secs = divmod(int(total_time), 60)
+            print(f"   ⏱️  TOTAL TIME: {mins} min {secs} sec ({total_time:.2f}s)")
+            print("="*80 + "\n")
+
+            return AnswerResponse(
+                question=original_question,
+                answer=answer,
+                references=references
+            )
+
+        # ============================================================
+        # SINGLE-ENTITY PATH: Use original retrieval logic
+        # ============================================================
+        print("🎯 SINGLE-ENTITY PATH (num_entities <= 1)")
+        print("-"*80)
+
         # Expand query with university full names for better retrieval
         # e.g., "JNU admission" → "JNU admission জগন্নাথ বিশ্ববিদ্যালয় Jagannath University..."
-        expanded_question = expand_query(request.question)
+        print("📝 STEP 2: Query Expansion")
+        expanded_question = expand_query(working_question)
+        if expanded_question != working_question:
+            print(f"   ✓ Expanded: \"{expanded_question[:200]}...\"")
+        else:
+            print("   ℹ️  No expansion needed")
 
-        if expanded_question != request.question:
-            print(f"[Query Expansion] Original: {request.question}")
-            print(f"[Query Expansion] Expanded: {expanded_question[:200]}...")
+        # Detect which university is being queried for post-retrieval filtering
+        queried_university, num_universities = get_queried_university(working_question)
+        print(f"   🏫 Queried University: {queried_university or 'None'}")
 
         # Use custom instruction if provided, otherwise use default Udvash system prompt
         instruction = request.language_instruction if request.language_instruction else UDVASH_SYSTEM_PROMPT
@@ -831,9 +1597,38 @@ async def ask_question(request: QuestionRequest):
         query_solution = None
 
         for attempt in range(max_retries):
-            # Get answer from HippoRAG
-            # Returns: Tuple[List[QuerySolution], List[str], List[Dict]]
-            query_solutions, response_messages, metadata_list = hipporag.rag_qa(queries=[query_with_instruction])
+            print("-"*80)
+            print(f"🔄 ATTEMPT {attempt + 1}/{max_retries}")
+
+            # Step 1: Retrieve documents
+            if not hipporag.ready_to_retrieve:
+                print("   ⚙️  Preparing retrieval objects...")
+                hipporag.prepare_retrieval_objects()
+
+            # Get retrieved documents first
+            print("   🔍 STEP 3: Retrieval")
+            retrieval_start = time.time()
+            query_solutions_retrieved = hipporag.retrieve(queries=[query_with_instruction])
+            print(f"   ⏱️  Retrieval Time: {time.time() - retrieval_start:.2f}s")
+
+            # Step 4: Apply university-based filtering if a specific university was detected
+            if queried_university and query_solutions_retrieved:
+                qs = query_solutions_retrieved[0]
+                if qs.docs and qs.doc_scores is not None:
+                    original_count = len(qs.docs)
+                    filtered_docs, filtered_scores = filter_documents_by_university(
+                        qs.docs, list(qs.doc_scores), queried_university
+                    )
+                    # Update the QuerySolution with filtered results
+                    qs.docs = filtered_docs
+                    qs.doc_scores = filtered_scores
+                    print(f"   🔧 University Filter: {original_count} → {len(filtered_docs)} docs")
+
+            # Step 5: Generate answer from filtered documents
+            print("   🤖 STEP 5: Answer Generation (Qwen3-80B)")
+            qa_start = time.time()
+            query_solutions, response_messages, metadata_list = hipporag.qa(query_solutions_retrieved)
+            print(f"   ⏱️  QA Time: {time.time() - qa_start:.2f}s")
 
             if query_solutions and len(query_solutions) > 0:
                 query_solution = query_solutions[0]
@@ -841,12 +1636,13 @@ async def ask_question(request: QuestionRequest):
 
                 # Check if we got a valid response (not empty/error)
                 if answer and "No response content available" not in answer:
+                    print(f"   ✅ Valid response received")
                     break
                 else:
-                    print(f"Attempt {attempt + 1}: Empty response, retrying...")
+                    print(f"   ⚠️  Empty response, retrying...")
 
             if attempt == max_retries - 1:
-                print(f"All {max_retries} attempts failed, using last response")
+                print(f"   ❌ All {max_retries} attempts failed, using last response")
 
         # Default "not found" message in Bengali
         NOT_FOUND_MESSAGE = "দুঃখিত, আপনার প্রশ্নের সঠিক উত্তর দেওয়ার জন্য প্রয়োজনীয় তথ্য আমার কাছে নেই।"
@@ -881,8 +1677,8 @@ async def ask_question(request: QuestionRequest):
             answer = NOT_FOUND_MESSAGE
 
         # Extract references from docs and doc_scores
-        # Only include high-quality references (score > 0.5) to reduce hallucination
-        MIN_REFERENCE_SCORE = 0.5
+        # Only include high-quality references (score > 0.4) to reduce hallucination
+        MIN_REFERENCE_SCORE = 0.4
         references = []
         if query_solution and not is_not_found:
             docs = query_solution.docs if query_solution.docs else []
@@ -897,14 +1693,29 @@ async def ask_question(request: QuestionRequest):
                         score=score
                     ))
 
+        # Final logging for single-entity path
+        total_time = time.time() - request_start_time
+        print("-"*80)
+        print("✅ SINGLE-ENTITY REQUEST COMPLETE")
+        if original_question != working_question:
+            print(f"   🔄 Query Rewritten: \"{original_question}\" → \"{working_question}\"")
+        print(f"   📝 Answer Length: {len(answer)} chars")
+        print(f"   📚 References: {len(references)}")
+        mins, secs = divmod(int(total_time), 60)
+        print(f"   ⏱️  TOTAL TIME: {mins} min {secs} sec ({total_time:.2f}s)")
+        print("="*80 + "\n")
+
         return AnswerResponse(
-            question=request.question,
+            question=original_question,
             answer=answer,
             references=references
         )
 
     except Exception as e:
         import traceback
+        print("="*80)
+        print(f"❌ ERROR: {str(e)}")
+        print("="*80)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -917,6 +1728,7 @@ async def debug_retrieval(request: QuestionRequest):
     try:
         # Apply query expansion
         expanded_question = expand_query(request.question)
+        queried_university, num_universities = get_queried_university(request.question)
         query_with_instruction = f"{expanded_question}\n\n({request.language_instruction})"
 
         # Get full results
@@ -926,12 +1738,19 @@ async def debug_retrieval(request: QuestionRequest):
             qs = query_solutions[0]
 
             # Show all retrieved docs with scores
-            retrieved = []
             docs = qs.docs if qs.docs else []
-            scores = qs.doc_scores if qs.doc_scores is not None else []
+            scores = list(qs.doc_scores) if qs.doc_scores is not None else []
 
-            for i, doc in enumerate(docs):
-                score = float(scores[i]) if i < len(scores) else 0.0
+            # Apply university filter for display
+            original_count = len(docs)
+            if queried_university:
+                filtered_docs, filtered_scores = filter_documents_by_university(docs, scores, queried_university)
+            else:
+                filtered_docs, filtered_scores = docs, scores
+
+            retrieved = []
+            for i, doc in enumerate(filtered_docs):
+                score = float(filtered_scores[i]) if i < len(filtered_scores) else 0.0
                 retrieved.append({
                     "rank": i + 1,
                     "score": score,
@@ -941,8 +1760,12 @@ async def debug_retrieval(request: QuestionRequest):
             return {
                 "question": request.question,
                 "expanded_query": expanded_question if expanded_question != request.question else None,
+                "queried_university": queried_university,
+                "university_filter_applied": queried_university is not None,
+                "docs_before_filter": original_count,
+                "docs_after_filter": len(filtered_docs),
                 "answer": qs.answer,
-                "total_retrieved": len(docs),
+                "total_retrieved": len(filtered_docs),
                 "retrieved_passages": retrieved,
                 "metadata": metadata_list[0] if metadata_list else {}
             }
@@ -990,17 +1813,20 @@ async def get_graph_stats():
 @app.post("/visualize-query")
 async def visualize_query(request: QuestionRequest):
     """Generate a visualization showing which nodes have high relevance for a query."""
+    print(f"\n[visualize-query] POST request received: {request.question[:50]}...")
     hipporag = get_hipporag()
 
     try:
         from visualize_query import get_query_relevance_scores, create_query_visualization
 
+        print("[visualize-query] Getting relevance scores...")
         # Get scores
         scores_data = get_query_relevance_scores(hipporag, request.question)
 
         if "error" in scores_data and scores_data.get("error"):
             return {"error": scores_data["error"]}
 
+        print("[visualize-query] Creating visualization HTML...")
         # Create visualization HTML
         output_path = create_query_visualization(hipporag, request.question)
 
@@ -1017,15 +1843,51 @@ async def visualize_query(request: QuestionRequest):
 
         if scores_data.get("warning"):
             result["warning"] = scores_data["warning"]
-        if scores_data.get("use_dpr_only"):
+        if scores_data.get("retrieval_method") == "dpr_only":
             result["mode"] = "DPR only (no knowledge graph facts matched)"
 
+        print(f"[visualize-query] Done! File: {output_path}")
         return result
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/visualize-query", response_class=HTMLResponse)
+async def visualize_query_get(q: str):
+    """
+    GET endpoint to visualize query relevance - opens directly in browser.
+    Usage: http://localhost:8000/visualize-query?q=your+query+here
+    """
+    print(f"\n[visualize-query GET] Request received: {q[:50]}...")
+    hipporag = get_hipporag()
+
+    try:
+        from visualize_query import get_query_relevance_scores, create_query_visualization
+
+        print("[visualize-query GET] Getting relevance scores...")
+        scores_data = get_query_relevance_scores(hipporag, q)
+
+        if "error" in scores_data and scores_data.get("error"):
+            return HTMLResponse(content=f"<h1>Error</h1><p>{scores_data['error']}</p>", status_code=500)
+
+        print("[visualize-query GET] Creating visualization HTML...")
+        output_path = create_query_visualization(hipporag, q)
+
+        print(f"[visualize-query GET] Done! Serving: {output_path}")
+
+        # Read and return the HTML file directly
+        with open(output_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+
+        return HTMLResponse(content=html_content)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return HTMLResponse(content=f"<h1>Error</h1><pre>{str(e)}</pre>", status_code=500)
 
 
 @app.post("/debug-facts")
@@ -1288,7 +2150,8 @@ if __name__ == "__main__":
     print("  POST /ask           - Ask a question")
     print("  POST /debug-retrieval - Debug retrieved passages")
     print("  GET  /graph-stats   - Get graph statistics")
-    print("  POST /visualize-query - Visualize query relevance on KG")
+    print("  POST /visualize-query - Visualize query relevance on KG (JSON)")
+    print("  GET  /visualize-query?q=... - Open visualization in browser")
     print("  GET  /query-scores/{q} - Get PPR scores for query")
     print("  POST /reload        - Reload from cache")
     print("\nSwagger Docs: http://localhost:8000/docs")
