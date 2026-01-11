@@ -47,6 +47,9 @@ Advance RAG is an enhanced RAG system built on top of HippoRAG, designed for hig
 | **Query Rewrite (GPT-4o-mini)** | Rewrites unclear queries for better understanding |
 | **Context-Aware Query Expansion** | Auto-expands queries with relevant keywords (exam dates, fees, etc.) |
 | **Multi-Entity Query Decomposition** | Splits complex multi-entity queries for parallel retrieval |
+| **University Chunk Tagging** | Auto-tags document chunks with source university for accurate filtering |
+| **University-Based Filtering** | Post-retrieval filtering ensures results match queried university |
+| **Contextual Not-Found Responses** | Helpful responses with relevant links when information unavailable |
 | **Answer Verification** | Response validation against source documents |
 | **Multilingual Support** | English and Bangla (including Banglish) language support |
 | **Improved NER** | Enhanced named entity recognition and triple extraction |
@@ -173,6 +176,19 @@ When you call `/ask`, the system automatically:
 5. **Multi-Entity Decomposition** - Splits multi-entity queries for parallel retrieval
 6. **Retrieval & Reranking** - Hybrid search with cross-encoder reranking
 7. **Answer Generation** - Grounded QA with source citations
+8. **Not-Found Handling** - Contextual responses with helpful links if no answer found
+
+### Not-Found Response Examples
+
+When information is unavailable, the system provides contextual help:
+
+| Question Category | Response Includes |
+|-------------------|-------------------|
+| Udvash-related (exam, result, batch) | https://udvash.com/HomePage |
+| Medical/Dental admission | https://dghs.gov.bd/ |
+| Engineering (BUET, CUET, KUET, RUET) | Individual university links |
+| Specific University (DU, RU, JnU, etc.) | That university's official site |
+| Cluster admission (গুচ্ছ) | https://gstadmission.ac.bd/ |
 
 ```
 Example Terminal Output:
