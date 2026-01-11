@@ -157,7 +157,7 @@ class CacheOpenAI(BaseLLM):
         config_dict['llm_base_url'] = self.global_config.llm_base_url
         config_dict['generate_params'] = {
                 "model": self.global_config.llm_name,
-                "max_completion_tokens": config_dict.get("max_new_tokens", 400),
+                "max_completion_tokens": config_dict.get("max_new_tokens", 4096),  # Increased for longer Bengali responses
                 "n": config_dict.get("num_gen_choices", 1),
                 "seed": config_dict.get("seed", 0),
                 "temperature": config_dict.get("temperature", 0.0),

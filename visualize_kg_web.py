@@ -64,8 +64,11 @@ def load_openie_results(save_dir='outputs', llm_model=None):
 
     return results
 
-def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_interactive.html'):
-    """Create interactive visualization using Pyvis."""
+def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_interactive.html', max_nodes=500, max_edges=2000):
+    """Create interactive visualization using Pyvis.
+
+    For large graphs, we sample the most connected nodes to keep the visualization manageable.
+    """
     try:
         from pyvis.network import Network
     except ImportError:
@@ -73,6 +76,37 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
         import subprocess
         subprocess.check_call(['pip', 'install', 'pyvis'])
         from pyvis.network import Network
+
+    total_nodes = graph.vcount()
+    total_edges = graph.ecount()
+
+    # For large graphs, sample the most connected nodes
+    sampled = False
+    if total_nodes > max_nodes:
+        print(f"  Graph too large ({total_nodes} nodes, {total_edges} edges). Sampling top {max_nodes} most connected nodes...")
+        sampled = True
+
+        # Get node degrees and sort by connectivity
+        degrees = [(v.index, graph.degree(v.index)) for v in graph.vs]
+        degrees.sort(key=lambda x: x[1], reverse=True)
+
+        # Select top N nodes
+        selected_node_ids = set([d[0] for d in degrees[:max_nodes]])
+
+        # Create subgraph with selected nodes
+        graph = graph.subgraph(list(selected_node_ids))
+
+        # Further limit edges if still too many
+        if graph.ecount() > max_edges:
+            print(f"  Still too many edges ({graph.ecount()}). Keeping top {max_edges} by weight...")
+            # Sort edges by weight and keep top ones
+            edge_weights = [(e.index, e['weight'] if 'weight' in graph.es.attributes() else 1.0) for e in graph.es]
+            edge_weights.sort(key=lambda x: x[1], reverse=True)
+            edges_to_keep = set([e[0] for e in edge_weights[:max_edges]])
+            edges_to_delete = [e.index for e in graph.es if e.index not in edges_to_keep]
+            graph.delete_edges(edges_to_delete)
+
+        print(f"  Sampled graph: {graph.vcount()} nodes, {graph.ecount()} edges")
 
     # Create Pyvis network with CDN resources to avoid 404 errors
     net = Network(
@@ -85,49 +119,48 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
         cdn_resources='in_line'  # Embed all JS/CSS to avoid 404 errors
     )
 
-    # Professional physics settings - optimized for large graphs
+    # Professional physics settings - MAXIMUM SPREAD for large graphs
     net.set_options('''
     {
         "nodes": {
             "font": {
-                "size": 11,
+                "size": 12,
                 "face": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
                 "color": "#ffffff",
                 "strokeWidth": 2,
                 "strokeColor": "#0a0e14"
             },
-            "borderWidth": 1,
-            "borderWidthSelected": 3,
+            "borderWidth": 2,
+            "borderWidthSelected": 4,
             "shadow": {
-                "enabled": true,
-                "color": "rgba(0,0,0,0.3)",
-                "size": 8,
-                "x": 0,
-                "y": 2
+                "enabled": false
+            },
+            "scaling": {
+                "min": 8,
+                "max": 25
             }
         },
         "edges": {
-            "color": {"color": "rgba(100,100,120,0.4)", "highlight": "#6366f1", "hover": "#818cf8"},
-            "smooth": {"type": "continuous", "roundness": 0.3},
+            "color": {"color": "rgba(100,100,120,0.2)", "highlight": "#6366f1", "hover": "#818cf8"},
+            "smooth": {"enabled": false},
             "arrows": {"to": {"enabled": true, "scaleFactor": 0.3}},
             "width": 0.5,
             "selectionWidth": 2
         },
         "physics": {
             "enabled": true,
-            "barnesHut": {
-                "gravitationalConstant": -8000,
-                "centralGravity": 0.15,
-                "springLength": 120,
-                "springConstant": 0.02,
-                "damping": 0.5,
-                "avoidOverlap": 0.5
+            "repulsion": {
+                "centralGravity": 0.001,
+                "springLength": 500,
+                "springConstant": 0.01,
+                "nodeDistance": 400,
+                "damping": 0.09
             },
-            "solver": "barnesHut",
+            "solver": "repulsion",
             "stabilization": {
                 "enabled": true,
-                "iterations": 150,
-                "updateInterval": 25,
+                "iterations": 1000,
+                "updateInterval": 50,
                 "fit": true
             },
             "maxVelocity": 30,
@@ -142,7 +175,12 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
             "dragView": true,
             "keyboard": {"enabled": true},
             "multiselect": true,
-            "navigationButtons": false
+            "navigationButtons": true
+        },
+        "layout": {
+            "improvedLayout": true,
+            "hierarchical": false,
+            "randomSeed": 42
         }
     }
     ''')
@@ -176,17 +214,48 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
         }
     }
 
+    # HTML escape function to prevent tags from showing
+    import html
+    def escape_html(text):
+        """Escape HTML special characters to prevent rendering issues."""
+        if not text:
+            return ''
+        return html.escape(str(text))
+
+    # First pass: Build node info lookup for connection details
+    node_info_lookup = {}
+    for v in graph.vs:
+        content = str(v['content']) if 'content' in graph.vs.attributes() else ''
+        name = v['name'] if 'name' in graph.vs.attributes() else str(v.index)
+        hash_id = v['hash_id'] if 'hash_id' in graph.vs.attributes() else ''
+        node_type = hash_id.split('-')[0] if '-' in hash_id else 'default'
+
+        # Escape HTML in content and name
+        content_escaped = escape_html(content)
+        name_escaped = escape_html(name)
+
+        if content_escaped and len(content_escaped) > 0:
+            display_name = content_escaped[:50] + '...' if len(content_escaped) > 50 else content_escaped
+        else:
+            display_name = name_escaped[:50] + '...' if len(name_escaped) > 50 else name_escaped
+
+        node_info_lookup[v.index] = {
+            'content': content_escaped,
+            'name': name_escaped,
+            'hash_id': hash_id,
+            'type': node_type,
+            'display_name': display_name
+        }
+
     # Add nodes with professional styling
     for v in graph.vs:
         node_id = v.index
+        info = node_info_lookup[node_id]
 
-        # Get node content/label
-        content = str(v['content']) if 'content' in graph.vs.attributes() else ''
-        name = v['name'] if 'name' in graph.vs.attributes() else str(node_id)
-        hash_id = v['hash_id'] if 'hash_id' in graph.vs.attributes() else ''
-
-        # Determine node type from hash_id prefix
-        node_type = hash_id.split('-')[0] if '-' in hash_id else 'default'
+        content = info['content']
+        name = info['name']
+        hash_id = info['hash_id']
+        node_type = info['type']
 
         # Create label (truncate if too long)
         if content and len(content) > 0:
@@ -210,16 +279,60 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
             size = 12 + min(degree * 2, 20)
             shape = 'dot'
 
-        # Professional hover tooltip with styled HTML
-        title = f'''<div style="font-family: system-ui; padding: 8px; max-width: 300px;">
-            <div style="font-weight: 600; font-size: 13px; color: #1e293b; margin-bottom: 6px;">{label}</div>
-            <div style="font-size: 11px; color: #64748b;">
-                <span style="background: {colors['background']}22; color: {colors['background']}; padding: 2px 6px; border-radius: 4px; font-weight: 500;">{node_type.upper()}</span>
-                <span style="margin-left: 8px;">{degree} connections</span>
-            </div>'''
-        if content and len(content) > 25:
-            title += f'<div style="margin-top: 8px; font-size: 11px; color: #475569; line-height: 1.4; border-top: 1px solid #e2e8f0; padding-top: 8px;">{content[:300]}{"..." if len(content) > 300 else ""}</div>'
-        title += '</div>'
+        # Get connected nodes info with IDs and full content
+        neighbors = graph.neighbors(node_id)
+        connected_chunks = []
+        connected_entities = []
+
+        for neighbor_id in neighbors[:20]:  # Limit to first 20 connections
+            if neighbor_id in node_info_lookup:
+                neighbor_info = node_info_lookup[neighbor_id]
+                neighbor_display = neighbor_info['display_name'][:35]
+                neighbor_hash = neighbor_info['hash_id']
+                neighbor_content = neighbor_info['content']  # Full content for chunks
+                if neighbor_info['type'] == 'chunk':
+                    connected_chunks.append((neighbor_display, neighbor_hash, neighbor_content))
+                else:
+                    connected_entities.append((neighbor_display, neighbor_hash))
+
+        # Build plain text tooltip (no HTML)
+        title_lines = []
+        title_lines.append(f"📌 {label}")
+        title_lines.append(f"Type: {node_type.upper()}")
+        title_lines.append(f"ID: {hash_id}")
+        title_lines.append(f"Connections: {degree}")
+
+        # Add content preview (for chunk nodes)
+        if node_type == 'chunk' and content and len(content) > 25:
+            title_lines.append("")
+            title_lines.append("--- Chunk Content ---")
+            content_preview = content[:500].replace('\n', ' ')
+            title_lines.append(content_preview + ("..." if len(content) > 500 else ""))
+
+        # Add connected passages with full content (for entity nodes)
+        if connected_chunks:
+            title_lines.append("")
+            title_lines.append(f"═══ Related Document Passages ({len(connected_chunks)}) ═══")
+            for i, (chunk_name, chunk_id, chunk_content) in enumerate(connected_chunks[:3]):
+                title_lines.append("")
+                title_lines.append(f"[Passage {i+1}] ID: {chunk_id}")
+                # Show more content from the chunk
+                chunk_preview = chunk_content[:400].replace('\n', ' ') if chunk_content else chunk_name
+                title_lines.append(chunk_preview + ("..." if len(chunk_content) > 400 else ""))
+            if len(connected_chunks) > 3:
+                title_lines.append("")
+                title_lines.append(f"  ... and {len(connected_chunks) - 3} more passages")
+
+        # Add connected entities with IDs
+        if connected_entities:
+            title_lines.append("")
+            title_lines.append(f"--- Connected Entities ({len(connected_entities)}) ---")
+            for entity_name, entity_id in connected_entities[:5]:
+                title_lines.append(f"  • {entity_name}")
+            if len(connected_entities) > 5:
+                title_lines.append(f"  ... and {len(connected_entities) - 5} more")
+
+        title = "\n".join(title_lines)
 
         net.add_node(
             node_id,
@@ -263,6 +376,9 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
     has_hash_id = 'hash_id' in graph.vs.attributes()
     entity_count = sum(1 for v in graph.vs if has_hash_id and v['hash_id'].startswith('entity'))
     chunk_count = sum(1 for v in graph.vs if has_hash_id and v['hash_id'].startswith('chunk'))
+
+    # Sampling notice
+    sampling_notice = f'<div style="font-size: 10px; color: #f59e0b; margin-top: 6px;">Sampled from {total_nodes:,} nodes, {total_edges:,} edges</div>' if sampled else ''
 
     # Add custom title and legend to HTML
     with open(output_file, 'r', encoding='utf-8') as f:
@@ -638,7 +754,7 @@ def create_pyvis_visualization(graph, output_file='outputs/knowledge_graph_inter
                 </svg>
                 HippoRAG Knowledge Graph
             </div>
-            <div class="kg-subtitle">Interactive visualization explorer</div>
+            <div class="kg-subtitle">Interactive visualization explorer{sampling_notice}</div>
         </div>
         <div class="kg-body">
             <!-- Search -->

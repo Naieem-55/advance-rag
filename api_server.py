@@ -396,6 +396,51 @@ UNIVERSITY_FILTER_PATTERNS = {
         "must_contain": ["বুয়েট", "buet", "[বুয়েট buet]"],
         "must_not_contain": [],
     },
+    # COU (Comilla University)
+    "cou": {
+        "must_contain": ["কুমিল্লা বিশ্ববিদ্যালয়", "comilla university", "কুবি", "cou", "[কুমিল্লা বিশ্ববিদ্যালয় cou]", "www.cou.ac.bd"],
+        "must_not_contain": [],
+    },
+    # BAU (Bangladesh Agricultural University)
+    "bau": {
+        "must_contain": ["বাংলাদেশ কৃষি বিশ্ববিদ্যালয়", "bangladesh agricultural", "বাকৃবি", "bau", "[বাকৃবি bau]"],
+        "must_not_contain": [],
+    },
+    # NSTU (Noakhali Science and Technology University)
+    "nstu": {
+        "must_contain": ["নোয়াখালী বিজ্ঞান", "noakhali science", "নোবিপ্রবি", "nstu", "[নোবিপ্রবি nstu]"],
+        "must_not_contain": [],
+    },
+    # PSTU (Patuakhali Science and Technology University)
+    "pstu": {
+        "must_contain": ["পটুয়াখালী বিজ্ঞান", "patuakhali science", "পবিপ্রবি", "pstu", "[পবিপ্রবি pstu]"],
+        "must_not_contain": [],
+    },
+    # JUST (Jashore University of Science and Technology)
+    "just": {
+        "must_contain": ["যশোর বিজ্ঞান", "jessore science", "jashore science", "যবিপ্রবি", "just", "[যবিপ্রবি just]"],
+        "must_not_contain": [],
+    },
+    # HSTU (Hajee Mohammad Danesh Science and Technology University)
+    "hstu": {
+        "must_contain": ["হাজী দানেশ", "hajee danesh", "হাবিপ্রবি", "hstu", "[হাবিপ্রবি hstu]"],
+        "must_not_contain": [],
+    },
+    # MBSTU (Mawlana Bhashani Science and Technology University)
+    "mbstu": {
+        "must_contain": ["মাওলানা ভাসানী", "mawlana bhashani", "মাভাবিপ্রবি", "mbstu", "[মাভাবিপ্রবি mbstu]"],
+        "must_not_contain": [],
+    },
+    # BU (Barishal University)
+    "bu": {
+        "must_contain": ["বরিশাল বিশ্ববিদ্যালয়", "barishal university", "ববি", "[বরিশাল বিশ্ববিদ্যালয় bu]"],
+        "must_not_contain": [],
+    },
+    # BRUR (Begum Rokeya University, Rangpur)
+    "brur": {
+        "must_contain": ["বেগম রোকেয়া", "begum rokeya", "বেরোবি", "brur", "[বেরোবি brur]"],
+        "must_not_contain": [],
+    },
 }
 
 
@@ -495,24 +540,68 @@ def get_queried_university(query: str) -> tuple:
 
     # Check for specific university patterns (order matters - check longer patterns first)
     university_patterns = [
+        # JNU vs JU (important - check longer patterns first)
         (r'\bjnu\b', 'jnu'),
         (r'\bju\b', 'ju'),
         (r'জগন্নাথ', 'jnu'),
         (r'জাহাঙ্গীরনগর', 'ju'),
         (r'জবি', 'jnu'),  # জবি = JNU (Jagannath)
         (r'জাবি', 'ju'),  # জাবি = JU (Jahangirnagar)
+        # Engineering universities (check before general universities)
         (r'\bkuet\b', 'kuet'),
-        (r'\bku\b', 'ku'),
-        (r'কুয়েট', 'kuet'),
-        (r'খুবি', 'ku'),
         (r'\bruet\b', 'ruet'),
-        (r'\bru\b', 'ru'),
-        (r'রুয়েট', 'ruet'),
-        (r'রাবি', 'ru'),
         (r'\bcuet\b', 'cuet'),
-        (r'\bcu\b', 'cu'),
+        (r'কুয়েট', 'kuet'),
+        (r'রুয়েট', 'ruet'),
         (r'চুয়েট', 'cuet'),
+        # General universities
+        (r'\bku\b', 'ku'),
+        (r'খুবি', 'ku'),
+        (r'\bru\b', 'ru'),
+        (r'রাবি', 'ru'),
+        (r'\bcu\b', 'cu'),
         (r'চবি', 'cu'),
+        (r'\bdu\b', 'du'),
+        (r'ঢাবি', 'du'),
+        (r'ঢাকা বিশ্ববিদ্যালয়', 'du'),
+        # COU (Comilla University) - IMPORTANT
+        (r'\bcou\b', 'cou'),
+        (r'কুবি', 'cou'),
+        (r'কুমিল্লা বিশ্ববিদ্যালয়', 'cou'),
+        (r'কুমিল্লা', 'cou'),
+        (r'comilla', 'cou'),
+        # SUST
+        (r'\bsust\b', 'sust'),
+        (r'শাবি', 'sust'),
+        (r'শাহজালাল', 'sust'),
+        # BUET
+        (r'\bbuet\b', 'buet'),
+        (r'বুয়েট', 'buet'),
+        # Other universities
+        (r'\bbau\b', 'bau'),
+        (r'বাকৃবি', 'bau'),
+        (r'কৃষি বিশ্ববিদ্যালয়', 'bau'),
+        (r'\bnstu\b', 'nstu'),
+        (r'নোবিপ্রবি', 'nstu'),
+        (r'নোয়াখালী', 'nstu'),
+        (r'\bpstu\b', 'pstu'),
+        (r'পবিপ্রবি', 'pstu'),
+        (r'পটুয়াখালী', 'pstu'),
+        (r'\bjust\b', 'just'),
+        (r'যবিপ্রবি', 'just'),
+        (r'যশোর বিজ্ঞান', 'just'),
+        (r'\bhstu\b', 'hstu'),
+        (r'হাবিপ্রবি', 'hstu'),
+        (r'হাজী দানেশ', 'hstu'),
+        (r'\bmbstu\b', 'mbstu'),
+        (r'মাভাবিপ্রবি', 'mbstu'),
+        (r'মাওলানা ভাসানী', 'mbstu'),
+        (r'\bbu\b', 'bu'),
+        (r'ববি', 'bu'),
+        (r'বরিশাল বিশ্ববিদ্যালয়', 'bu'),
+        (r'\bbrur\b', 'brur'),
+        (r'বেরোবি', 'brur'),
+        (r'বেগম রোকেয়া', 'brur'),
         # Additional patterns for other institutions
         (r'\bmist\b', 'mist'),
         (r'\bmedical\b', 'medical'),
@@ -538,10 +627,17 @@ def get_queried_university(query: str) -> tuple:
     return None, 0
 
 
-def filter_documents_by_university(docs: list, scores: list, queried_uni: str) -> tuple:
+def filter_documents_by_university(docs: list, scores: list, queried_uni: str, strict: bool = False) -> tuple:
     """
     Filter retrieved documents to only include those mentioning the queried university.
     Returns filtered (docs, scores) tuple.
+
+    Args:
+        docs: List of document contents
+        scores: List of corresponding scores
+        queried_uni: University abbreviation to filter by
+        strict: If True, only return docs that explicitly match the university.
+                If False (default), return original docs if filtering removes all.
     """
     if queried_uni not in UNIVERSITY_FILTER_PATTERNS:
         return docs, scores
@@ -552,12 +648,16 @@ def filter_documents_by_university(docs: list, scores: list, queried_uni: str) -
 
     filtered_docs = []
     filtered_scores = []
+    match_counts = []  # Track how many patterns matched for scoring
 
     for i, doc in enumerate(docs):
         doc_lower = doc.lower()
 
+        # Count how many required patterns are present (for ranking)
+        match_count = sum(1 for pattern in must_contain if pattern.lower() in doc_lower)
+
         # Check if document contains at least one required pattern
-        contains_required = any(pattern.lower() in doc_lower for pattern in must_contain) if must_contain else True
+        contains_required = match_count > 0 if must_contain else True
 
         # Check if document contains any forbidden pattern
         contains_forbidden = any(pattern.lower() in doc_lower for pattern in must_not_contain) if must_not_contain else False
@@ -565,11 +665,71 @@ def filter_documents_by_university(docs: list, scores: list, queried_uni: str) -
         if contains_required and not contains_forbidden:
             filtered_docs.append(doc)
             filtered_scores.append(scores[i] if i < len(scores) else 0.0)
+            match_counts.append(match_count)
 
-    # If filtering removed all documents, return original
+    # If filtering removed all documents
     if not filtered_docs:
-        return docs, scores
+        if strict:
+            # In strict mode, return empty - no relevant docs found
+            return [], []
+        else:
+            # Return original (backwards compatible)
+            return docs, scores
+
+    # Sort by match count (more matches = higher priority) while preserving score order for ties
+    if match_counts:
+        combined = list(zip(filtered_docs, filtered_scores, match_counts))
+        # Sort by match_count descending, then by score descending
+        combined.sort(key=lambda x: (x[2], x[1]), reverse=True)
+        filtered_docs = [x[0] for x in combined]
+        filtered_scores = [x[1] for x in combined]
+
     return filtered_docs, filtered_scores
+
+
+def strict_university_filter(docs: list, scores: list, queried_uni: str, min_docs: int = 2) -> tuple:
+    """
+    Strict filter that ONLY returns documents from the queried university.
+    Used after reranking to ensure answer relevance.
+
+    Args:
+        docs: List of document contents
+        scores: List of corresponding scores
+        queried_uni: University abbreviation
+        min_docs: Minimum docs to return (will pad with best matches if needed)
+
+    Returns:
+        Filtered (docs, scores) tuple
+    """
+    if queried_uni not in UNIVERSITY_FILTER_PATTERNS:
+        return docs, scores
+
+    filter_rules = UNIVERSITY_FILTER_PATTERNS[queried_uni]
+    must_contain = filter_rules.get("must_contain", [])
+
+    # Score each document by relevance to the queried university
+    scored_docs = []
+    for i, doc in enumerate(docs):
+        doc_lower = doc.lower()
+        # Count exact matches
+        match_score = sum(1 for pattern in must_contain if pattern.lower() in doc_lower)
+        scored_docs.append((doc, scores[i] if i < len(scores) else 0.0, match_score, i))
+
+    # Sort by university match score (descending), then original score
+    scored_docs.sort(key=lambda x: (x[2], x[1]), reverse=True)
+
+    # Filter to only include docs with at least one match
+    matched_docs = [(d, s) for d, s, m, _ in scored_docs if m > 0]
+
+    if len(matched_docs) >= min_docs:
+        return [d for d, _ in matched_docs], [s for _, s in matched_docs]
+
+    # If not enough matched docs, return what we have (might be empty)
+    if matched_docs:
+        return [d for d, _ in matched_docs], [s for _, s in matched_docs]
+
+    # Fallback: return top docs by original score (but warn this is not ideal)
+    return docs[:min_docs], scores[:min_docs]
 
 
 # ============================================================
@@ -1176,6 +1336,28 @@ UNIVERSITY_EXPANSION_MAP = {
     "বিষয়": "bishoy bisoy subject",
     "sub": "সাবজেক্ট বিষয় subject",
     "সাবজেক্ট": "sub বিষয় subject",
+
+    # Academic streams/groups
+    "manobik": "মানবিক humanities arts",
+    "manbik": "মানবিক humanities arts",
+    "mnobik": "মানবিক humanities arts",
+    "manobk": "মানবিক humanities arts",
+    "মানবিক": "manobik manbik mnobik manobk humanities arts",
+    "biggan": "বিজ্ঞান science",
+    "biggyan": "বিজ্ঞান science",
+    "bijnan": "বিজ্ঞান science",
+    "বিজ্ঞান": "biggan biggyan bijnan science",
+    "banijjo": "বাণিজ্য commerce business",
+    "banijjyo": "বাণিজ্য commerce business",
+    "banijya": "বাণিজ্য commerce business",
+    "বাণিজ্য": "banijjo banijjyo banijya commerce business",
+
+    # Qualities/characteristics
+    "gonaboli": "গুণাবলী qualities characteristics",
+    "gunaboli": "গুণাবলী qualities characteristics",
+    "gonaboly": "গুণাবলী qualities characteristics",
+    "gunaboly": "গুণাবলী qualities characteristics",
+    "গুণাবলী": "gonaboli gunaboli gonaboly gunaboly qualities characteristics",
 
     # Miscellaneous
     "ache": "আছে is there have",
@@ -1808,18 +1990,22 @@ async def ask_question(request: QuestionRequest):
             query_solutions_retrieved = hipporag.retrieve(queries=[query_with_instruction])
             print(f"   ⏱️  Retrieval Time: {time.time() - retrieval_start:.2f}s")
 
-            # Step 4: Apply university-based filtering if a specific university was detected
+            # Step 4: Apply STRICT university-based filtering if a specific university was detected
             if queried_university and query_solutions_retrieved:
                 qs = query_solutions_retrieved[0]
                 if qs.docs and qs.doc_scores is not None:
                     original_count = len(qs.docs)
-                    filtered_docs, filtered_scores = filter_documents_by_university(
-                        qs.docs, list(qs.doc_scores), queried_university
+                    # Use strict filtering to ensure only university-specific docs are returned
+                    filtered_docs, filtered_scores = strict_university_filter(
+                        qs.docs, list(qs.doc_scores), queried_university, min_docs=3
                     )
                     # Update the QuerySolution with filtered results
-                    qs.docs = filtered_docs
-                    qs.doc_scores = filtered_scores
-                    print(f"   🔧 University Filter: {original_count} → {len(filtered_docs)} docs")
+                    if filtered_docs:
+                        qs.docs = filtered_docs
+                        qs.doc_scores = filtered_scores
+                        print(f"   🔧 Strict University Filter ({queried_university.upper()}): {original_count} → {len(filtered_docs)} docs")
+                    else:
+                        print(f"   ⚠️  No docs matched {queried_university.upper()} filter, keeping original")
 
             # Step 5: Generate answer from filtered documents
             print("   🤖 STEP 5: Answer Generation (Qwen3-80B)")
