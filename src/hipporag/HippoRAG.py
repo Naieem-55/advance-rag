@@ -201,7 +201,8 @@ class HippoRAG:
         bm25_path = os.path.join(self.working_dir, "bm25_index.pkl")
         self.bm25_retriever = BM25Retriever(save_path=bm25_path)
         self.use_hybrid_search = True  # Enable hybrid search by default
-        self.hybrid_alpha = 0.7  # Weight for dense scores (0.7 dense, 0.3 BM25)
+        self.hybrid_alpha_default = 0.7  # Default weight for dense scores (conceptual queries)
+        self.hybrid_alpha_keyword = 0.45  # Weight for keyword-heavy queries (favor BM25)
 
         # BGE Reranker for excellent multilingual support (including Bangla)
         # BAAI/bge-reranker-v2-m3 is specifically trained for reranking
@@ -1700,6 +1701,72 @@ class HippoRAG:
             logger.error(f"Error computing fact scores: {str(e)}")
             return np.array([])
 
+    def get_query_aware_alpha(self, query: str) -> float:
+        """
+        Determine hybrid search alpha based on query characteristics.
+
+        - Keyword/date-heavy queries → lower alpha (favor BM25/lexical)
+        - Conceptual/semantic queries → higher alpha (favor dense embeddings)
+
+        Returns:
+            float: Alpha value between 0 and 1
+        """
+        import re
+        query_lower = query.lower()
+
+        # Date patterns (Bengali and English)
+        date_patterns = [
+            r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',  # DD/MM/YYYY, DD-MM-YYYY
+            r'\d{4}[/-]\d{1,2}[/-]\d{1,2}',    # YYYY-MM-DD
+            r'[০-৯]{1,2}[/-][০-৯]{1,2}[/-][০-৯]{2,4}',  # Bengali dates
+            r'তারিখ', r'date',  # Date keywords
+            r'কবে', r'কখন', r'when',  # When keywords
+        ]
+
+        # Specific procedural/factual keywords (Bengali and English)
+        keyword_patterns = [
+            # Admit card / application
+            r'admit\s*card', r'প্রবেশপত্র', r'এডমিট\s*কার্ড', r'অ্যাডমিট',
+            # Fees
+            r'fee', r'ফি', r'টাকা', r'চার্জ', r'খরচ',
+            # Deadlines
+            r'deadline', r'শেষ\s*তারিখ', r'last\s*date',
+            # Specific numbers/amounts
+            r'কত(?:\s+টাকা)?', r'how\s*much',
+            # Results
+            r'result', r'ফলাফল', r'রেজাল্ট',
+            # Seat/quota
+            r'seat', r'আসন', r'সিট', r'quota', r'কোটা',
+            # Contact info
+            r'phone', r'ফোন', r'নম্বর', r'email', r'ইমেইল', r'website', r'ওয়েবসাইট',
+            # Exam center
+            r'center', r'কেন্দ্র', r'সেন্টার',
+            # Download
+            r'download', r'ডাউনলোড',
+        ]
+
+        # Check for date patterns
+        has_date = any(re.search(p, query_lower) for p in date_patterns)
+
+        # Check for keyword patterns
+        keyword_count = sum(1 for p in keyword_patterns if re.search(p, query_lower))
+
+        # Determine alpha based on query type
+        if has_date or keyword_count >= 2:
+            # Procedural/date query - favor BM25
+            alpha = self.hybrid_alpha_keyword  # 0.45
+            logger.debug(f"[Query-Aware Alpha] Keyword/date query detected (dates={has_date}, keywords={keyword_count}). Alpha={alpha}")
+        elif keyword_count == 1:
+            # Mixed query - balanced
+            alpha = 0.55
+            logger.debug(f"[Query-Aware Alpha] Mixed query detected. Alpha={alpha}")
+        else:
+            # Conceptual query - favor dense
+            alpha = self.hybrid_alpha_default  # 0.7
+            logger.debug(f"[Query-Aware Alpha] Conceptual query. Alpha={alpha}")
+
+        return alpha
+
     def dense_passage_retrieval(self, query: str) -> Tuple[np.ndarray, np.ndarray]:
         """
         Conduct dense passage retrieval to find relevant documents for a query.
@@ -1737,19 +1804,23 @@ class HippoRAG:
         dense_sorted_ids = np.argsort(query_doc_scores)[::-1]
         dense_sorted_scores = query_doc_scores[dense_sorted_ids.tolist()]
 
-        # Hybrid search: combine dense and BM25 scores
+        # Hybrid search: combine dense and BM25 scores with query-aware alpha
         if self.use_hybrid_search and self.bm25_retriever.bm25 is not None:
             bm25_sorted_ids, bm25_sorted_scores = self.bm25_retriever.search(query)
 
             if len(bm25_sorted_ids) > 0:
+                # Get query-aware alpha (favors BM25 for date/keyword queries)
+                alpha = self.get_query_aware_alpha(query)
+
                 sorted_doc_ids, sorted_doc_scores = hybrid_score_fusion(
                     dense_ids=dense_sorted_ids,
                     dense_scores=dense_sorted_scores,
                     bm25_ids=bm25_sorted_ids,
                     bm25_scores=bm25_sorted_scores,
-                    alpha=self.hybrid_alpha,
+                    alpha=alpha,
                     num_docs=len(self.passage_node_keys)
                 )
+                logger.info(f"[Hybrid Search] Query-aware alpha={alpha:.2f} for: {query[:50]}...")
                 return sorted_doc_ids, sorted_doc_scores
 
         return dense_sorted_ids, dense_sorted_scores

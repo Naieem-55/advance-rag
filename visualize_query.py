@@ -209,13 +209,18 @@ def get_query_relevance_scores(hipporag, query: str) -> Dict:
     return result
 
 
-def create_query_visualization(hipporag, query: str, output_path: str = "outputs/query_graph.html") -> str:
+def create_query_visualization(hipporag, query: str, output_path: str = "outputs/query_graph.html", max_nodes: int = 200) -> str:
     """
-    Create an interactive visualization of the knowledge graph with query relevance scores.
-    Nodes are colored and sized based on their PPR scores.
+    Create a focused visualization showing only query-relevant nodes:
+    - Query entities (extracted from matched facts)
+    - Documents/passages connected to those entities
+    - Top retrieved passages
     """
+    import time
+    start_time = time.time()
 
     # Get relevance scores
+    print(f"  [viz] Getting relevance scores...")
     scores_data = get_query_relevance_scores(hipporag, query)
 
     if "error" in scores_data:
@@ -224,52 +229,146 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
 
     ppr_scores = scores_data.get("ppr_scores", {})
     query_entities = set(scores_data.get("query_entities", []))
-    use_dpr_only = scores_data.get("use_dpr_only", False)
+    top_passages = scores_data.get("top_passages", [])
+    top_facts = scores_data.get("top_facts", [])
+    retrieval_method = scores_data.get("retrieval_method", "hybrid_ppr_dpr")
+    use_dpr_only = retrieval_method == "dpr_only"
 
     if use_dpr_only:
-        print(f"Warning: {scores_data.get('warning', 'No facts matched')}")
+        print(f"  [viz] Warning: {scores_data.get('warning', 'No facts matched')}")
 
-    # Create network with professional styling
-    net = Network(height="100vh", width="100vw", bgcolor="#0f1419", font_color="#e7e9ea")
+    # Build focused subgraph with only relevant nodes
+    from src.hipporag.utils.misc_utils import compute_mdhash_id
 
-    # Professional physics settings - STABLE after initial layout
+    top_node_names = set()
+    query_entity_keys = set()
+    connected_chunk_keys = set()
+
+    # 1. Add query entities and their connected chunks
+    print(f"  [viz] Finding query entities and connected documents...")
+
+    # Helper to safely get vertex attribute
+    def get_hash_id(vertex):
+        return vertex['hash_id'] if 'hash_id' in hipporag.graph.vs.attributes() else ''
+
+    for qe in query_entities:
+        qe_key = compute_mdhash_id(content=qe, prefix="entity-")
+        query_entity_keys.add(qe_key)
+
+        # Find the entity node
+        for v in hipporag.graph.vs:
+            if get_hash_id(v) == qe_key:
+                top_node_names.add(v['name'])
+                break
+
+        # Get chunks connected to this entity
+        chunk_ids = hipporag.ent_node_to_chunk_ids.get(qe_key, set())
+        connected_chunk_keys.update(chunk_ids)
+
+    # 2. Add connected chunk nodes
+    for v in hipporag.graph.vs:
+        if get_hash_id(v) in connected_chunk_keys:
+            top_node_names.add(v['name'])
+
+    # 3. Add top retrieved passages (find by content match)
+    print(f"  [viz] Adding top {len(top_passages)} retrieved passages...")
+    top_passage_keys = set()
+    for p in top_passages[:10]:
+        for passage_key in hipporag.passage_node_keys:
+            try:
+                content = hipporag.chunk_embedding_store.get_row(passage_key).get("content", "")
+                if p["content"][:50] in content:
+                    top_passage_keys.add(passage_key)
+                    # Find node name
+                    for v in hipporag.graph.vs:
+                        if get_hash_id(v) == passage_key:
+                            top_node_names.add(v['name'])
+                            break
+                    break
+            except:
+                pass
+
+    # 4. Add entities from top facts that might not be in query_entities
+    for fact in top_facts[:10]:
+        for phrase in [fact.get('subject', ''), fact.get('object', '')]:
+            if phrase:
+                phrase_key = compute_mdhash_id(content=phrase.lower(), prefix="entity-")
+                for v in hipporag.graph.vs:
+                    if get_hash_id(v) == phrase_key:
+                        top_node_names.add(v['name'])
+                        # Also get chunks for these entities
+                        chunk_ids = hipporag.ent_node_to_chunk_ids.get(phrase_key, set())
+                        for cv in hipporag.graph.vs:
+                            if get_hash_id(cv) in chunk_ids:
+                                top_node_names.add(cv['name'])
+                        break
+
+    print(f"  [viz] Selected {len(top_node_names)} relevant nodes for visualization")
+
+    # Create network with CDN resources to avoid 404 errors
+    net = Network(
+        height="100vh",
+        width="100vw",
+        bgcolor="#0a0e14",
+        font_color="#e6e6e6",
+        cdn_resources='in_line'  # Embed all JS/CSS to avoid 404 errors
+    )
+
+    # Professional physics settings - optimized for large graphs
     net.set_options('''
     {
         "nodes": {
-            "font": {"size": 12, "face": "Inter, -apple-system, BlinkMacSystemFont, sans-serif", "color": "#e7e9ea"},
-            "borderWidth": 2,
-            "borderWidthSelected": 4
+            "font": {
+                "size": 11,
+                "face": "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+                "color": "#ffffff",
+                "strokeWidth": 2,
+                "strokeColor": "#0a0e14"
+            },
+            "borderWidth": 1,
+            "borderWidthSelected": 3,
+            "shadow": {
+                "enabled": true,
+                "color": "rgba(0,0,0,0.3)",
+                "size": 8,
+                "x": 0,
+                "y": 2
+            }
         },
         "edges": {
-            "color": {"color": "#38444d", "highlight": "#1d9bf0"},
-            "smooth": {"type": "continuous", "roundness": 0.5}
+            "color": {"color": "rgba(100,100,120,0.3)", "highlight": "#6366f1", "hover": "#818cf8"},
+            "smooth": {"type": "continuous", "roundness": 0.3},
+            "width": 0.5,
+            "selectionWidth": 2
         },
         "physics": {
             "enabled": true,
-            "forceAtlas2Based": {
-                "gravitationalConstant": -100,
-                "centralGravity": 0.02,
-                "springLength": 150,
-                "springConstant": 0.1,
-                "avoidOverlap": 0.8
+            "barnesHut": {
+                "gravitationalConstant": -8000,
+                "centralGravity": 0.15,
+                "springLength": 120,
+                "springConstant": 0.02,
+                "damping": 0.5,
+                "avoidOverlap": 0.5
             },
-            "solver": "forceAtlas2Based",
+            "solver": "barnesHut",
             "stabilization": {
                 "enabled": true,
-                "iterations": 200,
+                "iterations": 150,
                 "updateInterval": 25,
                 "fit": true
             },
-            "maxVelocity": 50,
-            "minVelocity": 0.1
+            "maxVelocity": 30,
+            "minVelocity": 0.75
         },
         "interaction": {
             "hover": true,
-            "tooltipDelay": 50,
+            "tooltipDelay": 100,
             "hideEdgesOnDrag": true,
             "hideEdgesOnZoom": true,
             "zoomView": true,
-            "dragView": true
+            "dragView": true,
+            "keyboard": {"enabled": true}
         }
     }
     ''')
@@ -293,51 +392,63 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
     # Store chunk contents for click-to-view
     chunk_contents = {}
 
-    # Professional color palette based on percentile ranking
-    def get_color(score, is_entity=True, is_query_entity=False, is_passage=False):
+    # Simple, clear color scheme for focused visualization
+    def get_color_config(is_query_entity=False, is_connected_chunk=False, is_top_passage=False, is_entity=True):
+        """Returns color config dict for vis.js nodes"""
         if is_query_entity:
-            return "#00ba7c"  # Green - query seed nodes
-
-        percentile = get_percentile(score)
-
-        if is_passage:
-            # Passage nodes: Blue gradient (professional)
-            if percentile < 50:
-                return "#536471"  # Muted gray - bottom 50%
-            elif percentile < 75:
-                return "#1d9bf0"  # Twitter blue - 50-75%
-            elif percentile < 90:
-                return "#794bc4"  # Purple - 75-90%
-            else:
-                return "#f91880"  # Pink/Magenta - top 10%
+            # Bright green for query entities (seed nodes)
+            return {
+                'background': '#10b981',
+                'border': '#059669',
+                'highlight': {'background': '#34d399', 'border': '#10b981'}
+            }
+        elif is_connected_chunk:
+            # Blue for chunks directly connected to query entities
+            return {
+                'background': '#3b82f6',
+                'border': '#2563eb',
+                'highlight': {'background': '#60a5fa', 'border': '#3b82f6'}
+            }
+        elif is_top_passage:
+            # Purple for top retrieved passages
+            return {
+                'background': '#8b5cf6',
+                'border': '#7c3aed',
+                'highlight': {'background': '#a78bfa', 'border': '#8b5cf6'}
+            }
+        elif is_entity:
+            # Indigo for other entities (from facts)
+            return {
+                'background': '#6366f1',
+                'border': '#4f46e5',
+                'highlight': {'background': '#818cf8', 'border': '#6366f1'}
+            }
         else:
-            # Entity nodes: Warm gradient
-            if percentile < 50:
-                return "#536471"  # Muted gray - bottom 50%
-            elif percentile < 70:
-                return "#ffd400"  # Gold - 50-70%
-            elif percentile < 85:
-                return "#ff7a00"  # Orange - 70-85%
-            elif percentile < 95:
-                return "#f4212e"  # Red - 85-95%
-            else:
-                return "#ff00ff"  # Magenta - top 5%
+            # Gray for other nodes
+            return {
+                'background': '#6b7280',
+                'border': '#4b5563',
+                'highlight': {'background': '#9ca3af', 'border': '#6b7280'}
+            }
 
-    # Import for hash ID computation
-    from src.hipporag.utils.misc_utils import compute_mdhash_id
+    # Note: query_entity_keys and connected_chunk_keys already computed above
 
-    # Pre-compute query entity keys and their connected chunks
-    query_entity_keys = set()
-    connected_chunk_keys = set()
-    for qe in query_entities:
-        qe_key = compute_mdhash_id(content=qe, prefix="entity-")
-        query_entity_keys.add(qe_key)
-        chunk_ids = hipporag.ent_node_to_chunk_ids.get(qe_key, set())
-        connected_chunk_keys.update(chunk_ids)
+    # Build index of included nodes for edge filtering
+    included_node_indices = set()
 
-    # Add nodes
+    # Add nodes (only those in top_node_names for performance)
+    print(f"  [viz] Adding {len(top_node_names)} nodes...")
+    node_count = 0
     for v in hipporag.graph.vs:
         node_name = v['name']
+
+        # Skip nodes not in the filtered set
+        if node_name not in top_node_names:
+            continue
+
+        included_node_indices.add(v.index)
+        node_count += 1
+
         hash_id = v['hash_id'] if 'hash_id' in hipporag.graph.vs.attributes() else ''
 
         score_data = ppr_scores.get(node_name, {})
@@ -346,73 +457,79 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
 
         is_entity = hash_id.startswith('entity')
         is_passage = hash_id.startswith('chunk')
-        is_query_entity = node_name.lower() in query_entities
+        is_query_entity = hash_id in query_entity_keys
+        is_connected_chunk = hash_id in connected_chunk_keys
+        is_top_passage = hash_id in top_passage_keys
 
-        # Check if this chunk is connected to a query entity
-        is_connected_to_query = hash_id in connected_chunk_keys
-
-        # Size based on percentile (for better visual distribution)
-        percentile = get_percentile(ppr_score)
-        size_factor = percentile / 100  # 0 to 1 scale
-
+        # Determine node appearance based on type
         if is_passage:
-            base_size = 20
             shape = "box"
             # Show passage content preview and store full content
             try:
                 content = hipporag.chunk_embedding_store.get_row(hash_id)["content"]
                 label = content[:50] + "..." if len(content) > 50 else content
-                # Store full content for click-to-view (escape for JavaScript)
                 chunk_contents[node_name] = content.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
             except:
-                label = "Passage"
+                label = "Document"
                 chunk_contents[node_name] = "Content not available"
+
+            # Size based on relevance
+            if is_connected_chunk:
+                size = 35  # Largest - directly connected to query entity
+                node_type_label = "Connected Document"
+                badge_color = "#3b82f6"
+            elif is_top_passage:
+                size = 30  # Large - top retrieved
+                node_type_label = "Retrieved Document"
+                badge_color = "#8b5cf6"
+            else:
+                size = 25
+                node_type_label = "Document"
+                badge_color = "#6b7280"
         else:
-            base_size = 15
             shape = "dot"
             label = node_name
 
-        if is_query_entity:
-            base_size = 30  # Larger for query entities
+            if is_query_entity:
+                size = 40  # Largest - query seed entity
+                node_type_label = "Query Entity"
+                badge_color = "#10b981"
+            else:
+                size = 30  # Related entity from facts
+                node_type_label = "Related Entity"
+                badge_color = "#6366f1"
 
-        if is_connected_to_query:
-            base_size = 35  # Even larger for connected chunks
+        # Get color config
+        color_config = get_color_config(
+            is_query_entity=is_query_entity,
+            is_connected_chunk=is_connected_chunk,
+            is_top_passage=is_top_passage,
+            is_entity=is_entity
+        )
 
-        size = base_size + size_factor * 30
+        # Border width
+        border_width = 3 if (is_query_entity or is_connected_chunk) else 2
 
-        # Special color for connected chunks
-        if is_connected_to_query:
-            color = "#00ba7c"  # Green for query-connected chunks
-            border_color = "#00ff9d"
-            border_width = 4
-        elif is_query_entity:
-            color = get_color(ppr_score, is_entity, is_query_entity, is_passage)
-            border_color = "#00ba7c"
-            border_width = 3
-        else:
-            color = get_color(ppr_score, is_entity, is_query_entity, is_passage)
-            border_color = color
-            border_width = 1
-
-        # Tooltip with score info
-        node_type = 'Query Entity' if is_query_entity else 'Connected Chunk' if is_connected_to_query else 'Entity' if is_entity else 'Passage'
-        title = f"""
-        <b>{node_name}</b><br>
-        Type: {node_type}<br>
-        PPR Score: {ppr_score:.6f}<br>
-        Initial Weight: {initial_weight:.6f}<br>
-        Hash: {hash_id}
-        """
+        # Tooltip
+        title = f'''<div style="font-family: system-ui; padding: 10px; max-width: 350px;">
+            <div style="font-weight: 600; font-size: 13px; color: #1e293b; margin-bottom: 8px;">{label[:80]}{"..." if len(label) > 80 else ""}</div>
+            <div style="margin-bottom: 8px;">
+                <span style="background: {badge_color}22; color: {badge_color}; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600;">{node_type_label.upper()}</span>
+            </div>
+            <div style="font-size: 11px; color: #64748b; line-height: 1.5;">
+                <div><b>PPR Score:</b> {ppr_score:.6f}</div>
+            </div>
+        </div>'''
 
         net.add_node(
             node_name,
-            label=label[:30] if len(label) > 30 else label,
+            label=label[:28] if len(label) > 28 else label,
             title=title,
             size=size,
-            color={"background": color, "border": border_color, "highlight": {"background": "#00ff9d", "border": "#00ba7c"}},
+            color=color_config,
             shape=shape,
             borderWidth=border_width,
-            borderWidthSelected=5
+            borderWidthSelected=4
         )
 
     # Get top passage keys from the top_passages data
@@ -431,8 +548,15 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
     # Combine all highlighted node keys
     highlighted_node_keys = query_entity_keys | connected_chunk_keys | top_passage_keys
 
-    # Add edges with highlighting for relevant connections
+    # Add edges with highlighting for relevant connections (only between included nodes)
+    print(f"  [viz] Adding edges between {node_count} nodes...")
+    edge_count = 0
     for e in hipporag.graph.es:
+        # Skip edges not between included nodes
+        if e.source not in included_node_indices or e.target not in included_node_indices:
+            continue
+
+        edge_count += 1
         source = hipporag.graph.vs[e.source]['name']
         target = hipporag.graph.vs[e.target]['name']
         source_hash = hipporag.graph.vs[e.source]['hash_id'] if 'hash_id' in hipporag.graph.vs.attributes() else ''
@@ -447,261 +571,576 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
         source_is_top_passage = source_hash in top_passage_keys
         target_is_top_passage = target_hash in top_passage_keys
 
-        # Determine edge style based on relevance
+        # Determine edge style based on relevance (matching professional design)
         if (source_is_query_entity and target_is_connected_chunk) or (target_is_query_entity and source_is_connected_chunk):
-            # Direct edge from query entity to its chunk - GOLD highlight
-            edge_color = "#00ba7c"
-            edge_width = 4
-            edge_dashes = False
-        elif (source_is_query_entity or target_is_query_entity) and (source_is_top_passage or target_is_top_passage):
-            # Edge involving query entity and top passage - GREEN highlight
-            edge_color = "#00ba7c"
+            # Direct edge from query entity to its chunk - Emerald highlight
+            edge_color = "#10b981"
             edge_width = 3
-            edge_dashes = False
-        elif source_is_query_entity or target_is_query_entity:
-            # Edge connected to query entity - CYAN highlight
-            edge_color = "#1d9bf0"
+        elif (source_is_query_entity or target_is_query_entity) and (source_is_top_passage or target_is_top_passage):
+            # Edge involving query entity and top passage - Green highlight
+            edge_color = "#34d399"
             edge_width = 2.5
-            edge_dashes = False
-        elif source_is_top_passage or target_is_top_passage:
-            # Edge connected to top passage - PURPLE highlight
-            edge_color = "#794bc4"
+        elif source_is_query_entity or target_is_query_entity:
+            # Edge connected to query entity - Indigo highlight
+            edge_color = "#6366f1"
             edge_width = 2
-            edge_dashes = False
+        elif source_is_top_passage or target_is_top_passage:
+            # Edge connected to top passage - Purple highlight
+            edge_color = "#8b5cf6"
+            edge_width = 1.5
         elif source_hash in highlighted_node_keys or target_hash in highlighted_node_keys:
             # Edge connected to any highlighted node - lighter highlight
-            edge_color = "#536471"
-            edge_width = 1.5
-            edge_dashes = False
+            edge_color = "rgba(100,100,120,0.5)"
+            edge_width = 1
         else:
-            # Default edge - dim gray
-            edge_color = "#2a3540"
-            edge_width = 0.5
-            edge_dashes = False
+            # Default edge - very dim
+            edge_color = "rgba(100,100,120,0.2)"
+            edge_width = 0.3
+
+        # Professional edge tooltip
+        edge_title = f'''<div style="font-family: system-ui; padding: 6px; font-size: 11px;">
+            <div style="color: #64748b;">Edge Weight</div>
+            <div style="font-weight: 500; color: #1e293b;">{weight:.4f}</div>
+        </div>'''
 
         net.add_edge(
             source,
             target,
             value=weight,
-            title=f"Weight: {weight:.4f}",
+            title=edge_title,
             color=edge_color,
-            width=edge_width,
-            dashes=edge_dashes
+            width=edge_width
         )
 
-    # Count node types for stats
-    has_hash_id = 'hash_id' in hipporag.graph.vs.attributes()
-    entity_count = sum(1 for v in hipporag.graph.vs if has_hash_id and v['hash_id'].startswith('entity'))
-    passage_count = sum(1 for v in hipporag.graph.vs if has_hash_id and v['hash_id'].startswith('chunk'))
+    print(f"  [viz] Added {edge_count} edges")
 
-    # Professional HTML content
+    # Count node types for stats
+    total_nodes = len(hipporag.graph.vs)
+    total_edges = len(hipporag.graph.es)
+    shown_nodes = node_count
+    shown_edges = edge_count
+    shown_passages = len(chunk_contents)
+
+    # Professional HTML content (matching main KG visualization design)
     html_content = f"""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        * {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; box-sizing: border-box; }}
-        html, body {{ margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #0f1419; }}
-        .card {{ width: 100vw !important; height: 100vh !important; margin: 0 !important; padding: 0 !important; border: none !important; }}
-        #mynetwork {{ width: 100vw !important; height: 100vh !important; position: fixed !important; top: 0 !important; left: 0 !important; border: none !important; }}
+        :root {{
+            --bg-primary: #0a0e14;
+            --bg-secondary: #111827;
+            --bg-tertiary: #1f2937;
+            --border-color: #374151;
+            --text-primary: #f9fafb;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --accent-indigo: #6366f1;
+            --accent-pink: #ec4899;
+            --accent-emerald: #10b981;
+            --accent-purple: #8b5cf6;
+            --accent-amber: #f59e0b;
+            --accent-red: #ef4444;
+        }}
+        * {{ font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; box-sizing: border-box; margin: 0; padding: 0; }}
+        html, body {{ width: 100vw; height: 100vh; overflow: hidden; background: var(--bg-primary); }}
+        .card {{ width: 100vw !important; height: 100vh !important; margin: 0 !important; padding: 0 !important; border: none !important; background: transparent !important; }}
+        #mynetwork {{ width: 100vw !important; height: 100vh !important; position: fixed !important; top: 0 !important; left: 0 !important; border: none !important; background: var(--bg-primary) !important; }}
         #loadingBar {{ display: none !important; }}
 
-        .panel {{
+        /* Loading overlay */
+        .loading-overlay {{
             position: fixed;
-            background: linear-gradient(145deg, rgba(22, 32, 42, 0.98), rgba(15, 20, 25, 0.98));
-            border: 1px solid #38444d;
-            border-radius: 16px;
-            color: #e7e9ea;
-            z-index: 1000;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(10px);
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--bg-primary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            transition: opacity 0.5s;
+        }}
+        .loading-overlay.hidden {{
+            opacity: 0;
+            pointer-events: none;
+        }}
+        .loading-spinner {{
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-indigo);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }}
+        .loading-text {{
+            margin-top: 16px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }}
+        @keyframes spin {{
+            to {{ transform: rotate(360deg); }}
         }}
 
-        .panel h3 {{ margin: 0 0 12px 0; font-weight: 600; font-size: 15px; }}
-        .panel p {{ margin: 6px 0; font-size: 13px; line-height: 1.5; }}
-        .panel hr {{ border: none; border-top: 1px solid #38444d; margin: 12px 0; }}
+        /* Panel styling */
+        .panel {{
+            position: fixed;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-primary);
+            z-index: 1000;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }}
+        .panel-header {{
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+            background: linear-gradient(135deg, var(--bg-tertiary), var(--bg-secondary));
+        }}
+        .panel-title {{
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .panel-body {{
+            padding: 14px 18px;
+            max-height: calc(100vh - 160px);
+            overflow-y: auto;
+        }}
+        .panel-body::-webkit-scrollbar {{
+            width: 6px;
+        }}
+        .panel-body::-webkit-scrollbar-track {{
+            background: var(--bg-tertiary);
+        }}
+        .panel-body::-webkit-scrollbar-thumb {{
+            background: var(--border-color);
+            border-radius: 3px;
+        }}
 
+        /* Query box */
+        .query-box {{
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-left: 3px solid var(--accent-indigo);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-primary);
+        }}
+
+        /* Stats grid */
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 14px;
+        }}
+        .stat-card {{
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 10px 8px;
+            text-align: center;
+        }}
+        .stat-value {{
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1.2;
+        }}
+        .stat-card.entities .stat-value {{ color: var(--accent-indigo); }}
+        .stat-card.passages .stat-value {{ color: var(--accent-pink); }}
+        .stat-card.edges .stat-value {{ color: var(--accent-emerald); }}
+        .stat-label {{
+            font-size: 9px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 2px;
+        }}
+
+        /* Matched entities */
+        .entities-box {{
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 14px;
+        }}
+        .entities-label {{
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }}
+        .entities-list {{
+            font-size: 12px;
+            color: var(--accent-emerald);
+            line-height: 1.5;
+        }}
+
+        /* Section divider */
+        .section-title {{
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 14px 0 8px 0;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-color);
+        }}
+
+        /* Legend items */
+        .legend-grid {{
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 4px;
+        }}
         .legend-item {{
             display: flex;
             align-items: center;
             gap: 10px;
-            padding: 4px 0;
+            padding: 5px 8px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
         }}
         .legend-dot {{
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             flex-shrink: 0;
         }}
         .legend-box {{
-            width: 14px;
+            width: 12px;
             height: 10px;
             border-radius: 3px;
             flex-shrink: 0;
         }}
-
-        .stat-card {{
-            background: rgba(29, 155, 240, 0.1);
-            border: 1px solid rgba(29, 155, 240, 0.2);
-            border-radius: 8px;
-            padding: 8px 12px;
-            margin: 8px 0;
+        .legend-line {{
+            width: 20px;
+            height: 3px;
+            border-radius: 2px;
+            flex-shrink: 0;
         }}
-        .stat-value {{ font-size: 20px; font-weight: 700; color: #1d9bf0; }}
-        .stat-label {{ font-size: 11px; color: #71767b; text-transform: uppercase; letter-spacing: 0.5px; }}
 
+        /* Passage items */
         .passage-item {{
-            background: rgba(255, 255, 255, 0.03);
+            background: var(--bg-tertiary);
             border-radius: 8px;
-            padding: 10px;
+            padding: 10px 12px;
             margin: 8px 0;
-            border-left: 3px solid #1d9bf0;
+            border-left: 3px solid var(--accent-indigo);
         }}
-        .passage-rank {{ color: #1d9bf0; font-weight: 600; }}
-        .passage-score {{ color: #71767b; font-size: 11px; }}
-        .passage-text {{ color: #e7e9ea; font-size: 12px; margin-top: 4px; line-height: 1.4; }}
+        .passage-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }}
+        .passage-rank {{
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent-indigo);
+            background: rgba(99, 102, 241, 0.15);
+            padding: 2px 8px;
+            border-radius: 4px;
+        }}
+        .passage-score {{
+            font-size: 10px;
+            color: var(--text-muted);
+        }}
+        .passage-text {{
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }}
 
+        /* Fact items */
         .fact-item {{
-            font-size: 12px;
-            color: #71767b;
-            padding: 4px 0;
+            font-size: 11px;
+            color: var(--text-secondary);
+            padding: 6px 8px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            margin: 4px 0;
         }}
-        .fact-predicate {{ color: #1d9bf0; }}
+        .fact-subject {{ color: var(--accent-indigo); }}
+        .fact-predicate {{ color: var(--accent-amber); }}
+        .fact-object {{ color: var(--accent-emerald); }}
 
+        /* Modal */
         #chunkModal {{
             display: none;
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0, 0, 0, 0.85);
-            z-index: 2000;
+            z-index: 3000;
             backdrop-filter: blur(5px);
         }}
         .modal-content {{
             position: relative;
             margin: 5% auto;
-            padding: 24px;
-            width: 80%;
-            max-width: 700px;
-            background: linear-gradient(145deg, #1e2732, #16202a);
-            border: 1px solid #38444d;
-            border-radius: 16px;
-            color: #e7e9ea;
+            padding: 0;
+            width: 85%;
+            max-width: 750px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-primary);
             box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }}
+        .modal-header {{
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .modal-title {{
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }}
         .modal-close {{
-            position: absolute;
-            top: 16px;
-            right: 20px;
-            font-size: 24px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
             cursor: pointer;
-            color: #71767b;
+            font-size: 20px;
+            padding: 4px;
+            line-height: 1;
             transition: color 0.2s;
         }}
-        .modal-close:hover {{ color: #f4212e; }}
+        .modal-close:hover {{ color: var(--accent-red); }}
         #chunkContent {{
             white-space: pre-wrap;
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 13px;
-            background: #0f1419;
-            padding: 16px;
-            border-radius: 8px;
-            max-height: 55vh;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 12px;
+            background: var(--bg-primary);
+            padding: 20px;
+            max-height: 60vh;
             overflow-y: auto;
-            line-height: 1.6;
-            border: 1px solid #38444d;
+            line-height: 1.7;
+            color: var(--text-secondary);
+        }}
+
+        /* Zoom controls */
+        .zoom-controls {{
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 1000;
+        }}
+        .zoom-btn {{
+            width: 36px;
+            height: 36px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            transition: all 0.2s;
+        }}
+        .zoom-btn:hover {{
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border-color: var(--accent-indigo);
+        }}
+
+        /* Tip */
+        .tip {{
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 12px;
+            padding: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }}
     </style>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Analyzing query relevance...</div>
+    </div>
 
     <!-- Modal for viewing chunk content -->
     <div id="chunkModal">
         <div class="modal-content">
-            <span id="closeModal" class="modal-close">&times;</span>
-            <h3 style="color: #1d9bf0; margin-bottom: 16px;">📄 Document Content</h3>
+            <div class="modal-header">
+                <div class="modal-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                    Document Content
+                </div>
+                <button class="modal-close" id="closeModal">&times;</button>
+            </div>
             <div id="chunkContent"></div>
         </div>
     </div>
 
     <!-- Left Panel: Query Info & Legend -->
-    <div class="panel" style="top: 20px; left: 20px; width: 320px; padding: 20px; max-height: calc(100vh - 80px); overflow-y: auto;">
-        <h3 style="color: #1d9bf0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Query Analysis</h3>
-        <p style="font-size: 14px; color: #e7e9ea; background: rgba(29, 155, 240, 0.1); padding: 12px; border-radius: 8px; border-left: 3px solid #1d9bf0;">"{query}"</p>
-
-        <div style="display: flex; gap: 10px; margin: 16px 0;">
-            <div class="stat-card" style="flex: 1; text-align: center;">
-                <div class="stat-value">{entity_count}</div>
-                <div class="stat-label">Entities</div>
-            </div>
-            <div class="stat-card" style="flex: 1; text-align: center;">
-                <div class="stat-value">{passage_count}</div>
-                <div class="stat-label">Passages</div>
-            </div>
-            <div class="stat-card" style="flex: 1; text-align: center;">
-                <div class="stat-value">{len(hipporag.graph.es)}</div>
-                <div class="stat-label">Edges</div>
+    <div class="panel" style="top: 16px; left: 16px; width: 280px;">
+        <div class="panel-header">
+            <div class="panel-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="M21 21l-4.35-4.35"/>
+                </svg>
+                Query Analysis
             </div>
         </div>
+        <div class="panel-body">
+            <div class="query-box">"{query}"</div>
 
-        <p style="font-size: 12px;"><b>Matched Entities:</b></p>
-        <p style="color: #00ba7c; font-size: 13px;">{', '.join(query_entities) if query_entities else 'None found'}</p>
+            <div class="stats-grid">
+                <div class="stat-card entities">
+                    <div class="stat-value">{shown_nodes:,}</div>
+                    <div class="stat-label">Nodes Shown</div>
+                </div>
+                <div class="stat-card passages">
+                    <div class="stat-value">{shown_passages:,}</div>
+                    <div class="stat-label">Passages</div>
+                </div>
+                <div class="stat-card edges">
+                    <div class="stat-value">{shown_edges:,}</div>
+                    <div class="stat-label">Edges</div>
+                </div>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 12px; text-align: center;">
+                Showing top relevant nodes from {total_nodes:,} total ({total_edges:,} edges)
+            </div>
 
-        <hr>
-        <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #71767b;">Entity Relevance</p>
-        <div class="legend-item"><div class="legend-dot" style="background: #00ba7c;"></div><span>Query Entity (seed)</span></div>
-        <div class="legend-item"><div class="legend-dot" style="background: #ff00ff;"></div><span>Top 5%</span></div>
-        <div class="legend-item"><div class="legend-dot" style="background: #f4212e;"></div><span>Top 5-15%</span></div>
-        <div class="legend-item"><div class="legend-dot" style="background: #ff7a00;"></div><span>Top 15-30%</span></div>
-        <div class="legend-item"><div class="legend-dot" style="background: #ffd400;"></div><span>Top 30-50%</span></div>
-        <div class="legend-item"><div class="legend-dot" style="background: #536471;"></div><span>Bottom 50%</span></div>
+            <div class="entities-box">
+                <div class="entities-label">Matched Entities</div>
+                <div class="entities-list">{', '.join(query_entities) if query_entities else 'None found in knowledge graph'}</div>
+            </div>
 
-        <hr>
-        <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #71767b;">Passage Relevance</p>
-        <div class="legend-item"><div class="legend-box" style="background: #00ba7c; border: 2px solid #00ff9d;"></div><span>Connected to Query Entity</span></div>
-        <div class="legend-item"><div class="legend-box" style="background: #f91880;"></div><span>Top 10%</span></div>
-        <div class="legend-item"><div class="legend-box" style="background: #794bc4;"></div><span>Top 10-25%</span></div>
-        <div class="legend-item"><div class="legend-box" style="background: #1d9bf0;"></div><span>Top 25-50%</span></div>
-        <div class="legend-item"><div class="legend-box" style="background: #536471;"></div><span>Bottom 50%</span></div>
+            <div class="section-title">Node Types</div>
+            <div class="legend-grid">
+                <div class="legend-item"><div class="legend-dot" style="background: #10b981;"></div><span>Query Entity (seed)</span></div>
+                <div class="legend-item"><div class="legend-dot" style="background: #6366f1;"></div><span>Related Entity</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: #3b82f6;"></div><span>Connected Document</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: #8b5cf6;"></div><span>Retrieved Document</span></div>
+            </div>
 
-        <hr>
-        <p style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #71767b;">Edge Highlighting</p>
-        <div class="legend-item"><div style="width: 24px; height: 4px; background: #00ba7c; border-radius: 2px;"></div><span>Entity → Chunk (direct)</span></div>
-        <div class="legend-item"><div style="width: 24px; height: 3px; background: #1d9bf0; border-radius: 2px;"></div><span>Query entity connections</span></div>
-        <div class="legend-item"><div style="width: 24px; height: 2px; background: #794bc4; border-radius: 2px;"></div><span>Top passage connections</span></div>
-        <div class="legend-item"><div style="width: 24px; height: 1px; background: #2a3540; border-radius: 2px;"></div><span>Other edges</span></div>
+            <div class="section-title">Edge Highlighting</div>
+            <div class="legend-grid">
+                <div class="legend-item"><div class="legend-line" style="background: #10b981;"></div><span>Entity to chunk (direct)</span></div>
+                <div class="legend-item"><div class="legend-line" style="background: #6366f1;"></div><span>Query entity connections</span></div>
+                <div class="legend-item"><div class="legend-line" style="background: #8b5cf6;"></div><span>Top passage connections</span></div>
+            </div>
 
-        <p style="font-size: 11px; color: #71767b; margin-top: 8px;">💡 Click passage nodes to view content</p>
+            <div class="tip">Click passage nodes to view full content</div>
+        </div>
     </div>
 
     <!-- Right Panel: Retrieved Results -->
-    <div class="panel" style="top: 20px; right: 20px; width: 340px; padding: 20px; max-height: calc(100vh - 80px); overflow-y: auto;">
-        <h3 style="color: #1d9bf0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Top Retrieved Passages</h3>
+    <div class="panel" style="top: 16px; right: 16px; width: 280px;">
+        <div class="panel-header">
+            <div class="panel-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                Retrieved Passages
+            </div>
+        </div>
+        <div class="panel-body">
     """
 
     for p in scores_data["top_passages"][:5]:
         html_content += f'''
-        <div class="passage-item">
-            <span class="passage-rank">#{p['rank']}</span>
-            <span class="passage-score">Score: {p['score']:.6f}</span>
-            <div class="passage-text">{p['content'][:120]}...</div>
-        </div>'''
+            <div class="passage-item">
+                <div class="passage-header">
+                    <span class="passage-rank">#{p['rank']}</span>
+                    <span class="passage-score">Score: {p['score']:.4f}</span>
+                </div>
+                <div class="passage-text">{p['content'][:150]}...</div>
+            </div>'''
 
     html_content += """
-        <hr>
-        <h3 style="color: #1d9bf0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Matched Facts</h3>
+            <div class="section-title">Matched Facts</div>
     """
 
     for f in scores_data["top_facts"][:5]:
-        html_content += f'''<div class="fact-item">({f['subject']}, <span class="fact-predicate">{f['predicate']}</span>, {f['object']})</div>'''
+        html_content += f'''<div class="fact-item">(<span class="fact-subject">{f['subject']}</span>, <span class="fact-predicate">{f['predicate']}</span>, <span class="fact-object">{f['object']}</span>)</div>'''
 
     if not scores_data["top_facts"]:
-        html_content += '<p style="color: #71767b; font-size: 12px;">No facts matched</p>'
+        html_content += '<div class="fact-item" style="color: var(--text-muted);">No facts matched in knowledge graph</div>'
 
-    html_content += "</div>"
+    html_content += """
+        </div>
+    </div>
 
-    # JavaScript for chunk content storage and modal
+    <!-- Zoom controls -->
+    <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomIn()" title="Zoom In">+</button>
+        <button class="zoom-btn" onclick="zoomOut()" title="Zoom Out">-</button>
+        <button class="zoom-btn" onclick="fitGraph()" title="Fit All">&#8689;</button>
+        <button class="zoom-btn" onclick="togglePanels()" title="Toggle Panels" id="toggleBtn">&#9776;</button>
+    </div>
+    """
+
+    # JavaScript for chunk content storage, modal, zoom controls, and loading overlay
     import json
     chunk_json = json.dumps(chunk_contents, ensure_ascii=False)
 
     html_content += f"""
     <script>
     var chunkContents = {chunk_json};
+
+    // Zoom controls
+    function zoomIn() {{
+        if (typeof network !== 'undefined') {{
+            var scale = network.getScale() * 1.3;
+            network.moveTo({{ scale: scale, animation: {{ duration: 300 }} }});
+        }}
+    }}
+    function zoomOut() {{
+        if (typeof network !== 'undefined') {{
+            var scale = network.getScale() / 1.3;
+            network.moveTo({{ scale: scale, animation: {{ duration: 300 }} }});
+        }}
+    }}
+    function fitGraph() {{
+        if (typeof network !== 'undefined') {{
+            network.fit({{ animation: {{ duration: 500, easingFunction: 'easeInOutQuad' }} }});
+        }}
+    }}
+
+    // Toggle panels for full graph view
+    var panelsVisible = true;
+    function togglePanels() {{
+        var panels = document.querySelectorAll('.panel');
+        panelsVisible = !panelsVisible;
+        panels.forEach(function(p) {{
+            p.style.display = panelsVisible ? 'block' : 'none';
+        }});
+        document.getElementById('toggleBtn').style.background = panelsVisible ? '' : '#6366f1';
+    }}
 
     // Close modal on click
     document.getElementById('closeModal').onclick = function() {{
@@ -725,6 +1164,7 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
     """
 
     # Save and customize HTML
+    print(f"  [viz] Generating HTML file...")
     net.save_graph(output_path)
 
     # Add legend to the HTML
@@ -739,16 +1179,15 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
     // Wait for network to be ready, then add handlers
     function setupNetwork() {
         if (typeof network !== 'undefined') {
-            // DISABLE PHYSICS after stabilization - makes graph stable
+            // Hide loading overlay and disable physics after stabilization
             network.on('stabilizationIterationsDone', function() {
-                console.log('Stabilization complete - disabling physics');
                 network.setOptions({ physics: { enabled: false } });
+                document.getElementById('loadingOverlay').classList.add('hidden');
             });
 
-            // Also disable after stabilized event
             network.on('stabilized', function() {
-                console.log('Graph stabilized - disabling physics');
                 network.setOptions({ physics: { enabled: false } });
+                document.getElementById('loadingOverlay').classList.add('hidden');
             });
 
             // Click handler for viewing chunk content
@@ -762,19 +1201,28 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
                 }
             });
 
-            // Double-click to re-enable physics temporarily (for repositioning)
+            // Double-click to focus on node or re-enable physics
             network.on('doubleClick', function(params) {
-                if (params.nodes.length === 0) {
-                    console.log('Re-enabling physics for 3 seconds...');
+                if (params.nodes.length > 0) {
+                    // Focus on the clicked node
+                    network.focus(params.nodes[0], {
+                        scale: 1.5,
+                        animation: { duration: 500, easingFunction: 'easeInOutQuad' }
+                    });
+                } else {
+                    // Re-enable physics temporarily for repositioning
                     network.setOptions({ physics: { enabled: true } });
                     setTimeout(function() {
                         network.setOptions({ physics: { enabled: false } });
-                        console.log('Physics disabled again');
                     }, 3000);
                 }
             });
 
-            console.log('Network handlers added');
+            // Timeout to hide loading if stabilization takes too long
+            setTimeout(function() {
+                document.getElementById('loadingOverlay').classList.add('hidden');
+            }, 8000);
+
         } else {
             setTimeout(setupNetwork, 100);
         }
@@ -793,7 +1241,9 @@ def create_query_visualization(hipporag, query: str, output_path: str = "outputs
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
-    print(f"Query visualization saved to: {output_path}")
+    elapsed = time.time() - start_time
+    print(f"  [viz] Done! {node_count} nodes, {edge_count} edges in {elapsed:.1f}s")
+    print(f"  [viz] Saved to: {output_path}")
     return output_path
 
 
