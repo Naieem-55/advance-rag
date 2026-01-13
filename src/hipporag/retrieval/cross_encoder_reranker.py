@@ -11,7 +11,6 @@ from ..utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-
 class CrossEncoderReranker:
     """Cross-encoder based reranker for improving retrieval precision."""
 

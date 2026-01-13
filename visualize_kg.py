@@ -8,27 +8,81 @@ import json
 import os
 from collections import defaultdict
 
-def load_graph(save_dir='outputs', llm_model='gpt-4o', embedding_model='text-embedding-3-large'):
-    """Load the igraph object from pickle file."""
-    graph_path = os.path.join(save_dir, f"{llm_model}_{embedding_model}", "graph.pickle")
+def find_graph_files(save_dir='outputs'):
+    """Find all graph.pickle files in the outputs directory."""
+    graph_files = []
+    if not os.path.exists(save_dir):
+        return graph_files
 
-    if not os.path.exists(graph_path):
-        print(f"Graph not found at: {graph_path}")
+    for item in os.listdir(save_dir):
+        item_path = os.path.join(save_dir, item)
+        if os.path.isdir(item_path):
+            graph_path = os.path.join(item_path, 'graph.pickle')
+            if os.path.exists(graph_path):
+                graph_files.append(graph_path)
+
+    return graph_files
+
+def load_graph(save_dir='outputs', llm_model=None, embedding_model=None):
+    """Load the igraph object from pickle file. Auto-detects if no model specified."""
+
+    # Auto-detect graph files
+    graph_files = find_graph_files(save_dir)
+
+    if not graph_files:
+        print(f"No graph.pickle files found in: {save_dir}")
         print("Please run indexing first with test_hipporag.py")
-        return None
+        return None, None
+
+    # If specific models provided, look for that path
+    if llm_model and embedding_model:
+        graph_path = os.path.join(save_dir, f"{llm_model}_{embedding_model}", "graph.pickle")
+        if not os.path.exists(graph_path):
+            print(f"Graph not found at: {graph_path}")
+            print(f"\nAvailable graphs:")
+            for gf in graph_files:
+                print(f"  - {gf}")
+            return None, None
+    else:
+        # Use the first found graph (or let user choose if multiple)
+        if len(graph_files) == 1:
+            graph_path = graph_files[0]
+        else:
+            print(f"Found {len(graph_files)} graphs:")
+            for i, gf in enumerate(graph_files):
+                print(f"  [{i+1}] {gf}")
+            print(f"\nUsing: {graph_files[0]}")
+            graph_path = graph_files[0]
+
+    print(f"Loading graph from: {graph_path}")
 
     with open(graph_path, 'rb') as f:
         graph = pickle.load(f)
 
-    return graph
+    return graph, graph_path
 
-def load_openie_results(save_dir='outputs', llm_model='gpt-4o'):
-    """Load OpenIE extraction results (entities and triples)."""
-    openie_path = os.path.join(save_dir, f"openie_results_ner_{llm_model}.json")
+def load_openie_results(save_dir='outputs', llm_model=None):
+    """Load OpenIE extraction results (entities and triples). Auto-detects if no model specified."""
+    import glob
+
+    if llm_model:
+        openie_path = os.path.join(save_dir, f"openie_results_ner_{llm_model}.json")
+    else:
+        # Auto-detect openie results
+        pattern = os.path.join(save_dir, "openie_results_ner_*.json")
+        matches = glob.glob(pattern)
+        if not matches:
+            print(f"No OpenIE results found in: {save_dir}")
+            return None
+        openie_path = matches[0]
+        if len(matches) > 1:
+            print(f"Found {len(matches)} OpenIE result files, using: {openie_path}")
 
     if not os.path.exists(openie_path):
         print(f"OpenIE results not found at: {openie_path}")
         return None
+
+    print(f"Loading OpenIE results from: {openie_path}")
 
     with open(openie_path, 'r', encoding='utf-8') as f:
         results = json.load(f)
@@ -281,7 +335,7 @@ def main():
 
     # Load graph
     print("\nLoading knowledge graph...")
-    graph = load_graph()
+    graph, graph_path = load_graph()
 
     if graph is None:
         print("\nNo graph found. Please run test_hipporag.py first to create the knowledge graph.")
@@ -315,8 +369,7 @@ def main():
     print("\n" + "="*60)
     print("  SUMMARY")
     print("="*60)
-    print(f"\nKnowledge graph location: outputs/gpt-4o_text-embedding-3-large/graph.pickle")
-    print(f"OpenIE results location: outputs/openie_results_ner_gpt-4o.json")
+    print(f"\nKnowledge graph location: {graph_path}")
 
     if igraph_success or nx_success:
         print("\nVisualization images saved in outputs/ folder")

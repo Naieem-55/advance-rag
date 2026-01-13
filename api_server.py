@@ -16,33 +16,62 @@ import glob
 from dotenv import load_dotenv
 load_dotenv()
 
-# Multi-model configuration for better accuracy
-# - Reasoning LLM (Thinking model) for OpenIE/NER
-# - Answer LLM (Instruct model) for response generation
-# - Fallback LLM (Local Ollama) for reliability
+# =============================================================================
+# MODEL CONFIGURATION - Easy switching between different LLMs
+# =============================================================================
+# Change ANSWER_MODEL to switch between different answer generation models:
+#   "gpt-4o-mini"  - OpenAI GPT-4o-mini (fast, cheap, good for testing)
+#   "gpt-4o"       - OpenAI GPT-4o (slower, expensive, better quality)
+#   "qwen3-80b"    - Qwen3-next 80B on local Ollama (slow, free, 32K context)
+# =============================================================================
+
+ANSWER_MODEL = "qwen3-80b"  # <-- CHANGE THIS TO SWITCH MODELS
+
+# Model presets
+MODEL_PRESETS = {
+    "gpt-4o-mini": {
+        "name": "gpt-4o-mini",
+        "base_url": None,  # OpenAI API
+        "description": "Fast, cheap, good for testing"
+    },
+    "gpt-4o": {
+        "name": "gpt-4o",
+        "base_url": None,  # OpenAI API
+        "description": "Slower, expensive, better quality"
+    },
+    "qwen3-80b": {
+        "name": "qwen3-next:80b-a3b-instruct-q4_K_M",
+        "base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
+        "description": "Local Ollama, free, 32K context"
+    },
+}
+
+# Build config from selected preset
+_answer_preset = MODEL_PRESETS.get(ANSWER_MODEL, MODEL_PRESETS["qwen3-80b"])
 
 MULTI_MODEL_CONFIG = {
     "use_multi_model": True,
     # GPT-4o for OpenIE/NER (fast, accurate entity extraction)
     "reasoning_llm_name": "gpt-4o",
     "reasoning_llm_base_url": None,  # Use OpenAI API directly
-    # Qwen3 for answer generation (local, no API cost)
-    "answer_llm_name": "qwen3-next:80b-a3b-instruct-q4_K_M",
-    "answer_llm_base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
+    # Answer model from preset
+    "answer_llm_name": _answer_preset["name"],
+    "answer_llm_base_url": _answer_preset["base_url"],
     # Fallback to local Ollama
     "fallback_llm_name": "qwen3-next:80b-a3b-instruct-q4_K_M",
     "fallback_llm_base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
 }
 
 # Set to True to use multi-model architecture
-# GPT-4o for NER/Triple Extraction, Qwen3 for answers
 USE_MULTI_MODEL = True
 
+print("=" * 60)
+print(f"ANSWER MODEL: {ANSWER_MODEL} ({_answer_preset['description']})")
 print("=" * 60)
 if USE_MULTI_MODEL:
     print("Multi-Model Mode ENABLED:")
     print(f"  NER/Triples: {MULTI_MODEL_CONFIG['reasoning_llm_name']} (OpenAI)")
-    print(f"  Answers:     {MULTI_MODEL_CONFIG['answer_llm_name']} (Ollama)")
+    print(f"  Answers:     {MULTI_MODEL_CONFIG['answer_llm_name']}")
     print(f"  Fallback:    {MULTI_MODEL_CONFIG['fallback_llm_name']}")
 else:
     print("Single-Model Mode:")
@@ -107,6 +136,13 @@ UDVASH_SYSTEM_PROMPT = """উদ্ভাস AI Admin — Official AI Assistant 
 - If multiple passages have conflicting information, trust the FIRST passage
 - Only use information from later passages if the first passage doesn't answer the question
 - Do NOT mix dates/information from different passages unless they are clearly about different topics
+
+## CRITICAL: মানবিক/বাণিজ্য = অ-বিজ্ঞান শাখা (MUST UNDERSTAND)
+- **মানবিক (Arts) = অ-বিজ্ঞান শাখা** - These are THE SAME THING
+- **বাণিজ্য (Commerce) = অ-বিজ্ঞান শাখা** - These are THE SAME THING
+- When user asks about "মানবিক" seats, look for "অ-বিজ্ঞান শাখার পরীক্ষার্থীদের আসন বণ্টন"
+- NEVER say "মানবিকের জন্য আসন নেই" if you see "অ-বিজ্ঞান শাখার আসন বণ্টন" in passages
+- RU C Unit: অ-বিজ্ঞান শাখা = মানবিক/বাণিজ্য students have 40 seats (ভূগোল ১০ + মনোবিজ্ঞান ২০ + শারীরিক শিক্ষা ১০)
 
 ## Answer Size Control
 - Keep responses concise & specific.
@@ -360,7 +396,8 @@ UNIVERSITY_FILTER_PATTERNS = {
         "must_not_contain": ["প্রকৌশল", "engineering", "কুয়েট", "kuet"],
     },
     "kuet": {
-        "must_contain": ["প্রকৌশল", "engineering", "কুয়েট", "kuet", "[কুয়েট kuet]"],
+        # Must contain KUET-specific terms (not generic "প্রকৌশল" which matches all engineering unis)
+        "must_contain": ["কুয়েট", "kuet", "[কুয়েট", "খুলনা প্রকৌশল", "admission.kuet"],
         "must_not_contain": [],
     },
     # RU (Rajshahi) vs RUET
@@ -369,7 +406,8 @@ UNIVERSITY_FILTER_PATTERNS = {
         "must_not_contain": ["প্রকৌশল", "engineering", "রুয়েট", "ruet"],
     },
     "ruet": {
-        "must_contain": ["প্রকৌশল", "engineering", "রুয়েট", "ruet", "[রুয়েট ruet]"],
+        # Must contain RUET-specific terms (not generic "প্রকৌশল" which matches all engineering unis)
+        "must_contain": ["রুয়েট", "ruet", "[রুয়েট", "রাজশাহী প্রকৌশল", "admission.ruet"],
         "must_not_contain": [],
     },
     # CU (Chittagong) vs CUET
@@ -378,7 +416,8 @@ UNIVERSITY_FILTER_PATTERNS = {
         "must_not_contain": ["প্রকৌশল", "engineering", "চুয়েট", "cuet"],
     },
     "cuet": {
-        "must_contain": ["প্রকৌশল", "engineering", "চুয়েট", "cuet", "[চুয়েট cuet]"],
+        # Must contain CUET-specific terms (not generic "প্রকৌশল" which matches all engineering unis)
+        "must_contain": ["চুয়েট", "cuet", "[চুয়েট", "চট্টগ্রাম প্রকৌশল", "admission.cuet"],
         "must_not_contain": [],
     },
     # DU (Dhaka)
@@ -439,6 +478,11 @@ UNIVERSITY_FILTER_PATTERNS = {
     # BRUR (Begum Rokeya University, Rangpur)
     "brur": {
         "must_contain": ["বেগম রোকেয়া", "begum rokeya", "বেরোবি", "brur", "[বেরোবি brur]"],
+        "must_not_contain": [],
+    },
+    # UDVASH / UNMESH / UTTORON Coaching Centers
+    "coaching": {
+        "must_contain": ["udvash", "উদ্ভাস", "unmesh", "উন্মেষ", "uttoron", "উত্তরণ", "batch", "ব্যাচ", "test exam", "online exam", "offline exam", "branch", "শাখা", "কোচিং", "মেধাবৃত্তি", "medha britti", "medhab", "scholarship exam", "মডেল টেস্ট", "model test"],
         "must_not_contain": [],
     },
 }
@@ -538,6 +582,20 @@ def get_queried_university(query: str) -> tuple:
     import re
     query_lower = query.lower()
 
+    # PRIORITY CHECK: Strong coaching indicators - return immediately if found
+    # These are specific to UDVASH/UNMESH/UTTORON coaching centers
+    strong_coaching_patterns = [
+        r'\budvash\b', r'উদ্ভাস',
+        r'\bunmesh\b', r'উন্মেষ',
+        r'\buttoron\b', r'উত্তরণ',
+        r'medha.?britti', r'medhab', r'মেধাবৃত্তি',
+        r'কোচিং', r'coaching',
+        r'model.?test', r'মডেল.?টেস্ট',
+    ]
+    for pattern in strong_coaching_patterns:
+        if re.search(pattern, query_lower):
+            return "coaching", 1
+
     # Check for specific university patterns (order matters - check longer patterns first)
     university_patterns = [
         # JNU vs JU (important - check longer patterns first)
@@ -606,6 +664,27 @@ def get_queried_university(query: str) -> tuple:
         (r'\bmist\b', 'mist'),
         (r'\bmedical\b', 'medical'),
         (r'মেডিকেল', 'medical'),
+        # UDVASH / UNMESH / UTTORON Coaching Centers
+        (r'\budvash\b', 'coaching'),
+        (r'উদ্ভাস', 'coaching'),
+        (r'\bunmesh\b', 'coaching'),
+        (r'উন্মেষ', 'coaching'),
+        (r'\buttoron\b', 'coaching'),
+        (r'উত্তরণ', 'coaching'),
+        (r'\bbatch\b', 'coaching'),
+        (r'ব্যাচ', 'coaching'),
+        (r'test exam', 'coaching'),
+        (r'online exam', 'coaching'),
+        (r'offline exam', 'coaching'),
+        (r'\bbranch\b', 'coaching'),
+        (r'শাখা', 'coaching'),
+        (r'কোচিং', 'coaching'),
+        (r'medha.?britti', 'coaching'),
+        (r'medhab', 'coaching'),
+        (r'মেধাবৃত্তি', 'coaching'),
+        (r'scholarship\s*exam', 'coaching'),
+        (r'model\s*test', 'coaching'),
+        (r'মডেল টেস্ট', 'coaching'),
     ]
 
     # Count how many different universities are mentioned
@@ -651,6 +730,9 @@ def filter_documents_by_university(docs: list, scores: list, queried_uni: str, s
     match_counts = []  # Track how many patterns matched for scoring
 
     for i, doc in enumerate(docs):
+        # Ensure doc is a string
+        if not isinstance(doc, str):
+            doc = str(doc)
         doc_lower = doc.lower()
 
         # Count how many required patterns are present (for ranking)
@@ -728,52 +810,177 @@ def strict_university_filter(docs: list, scores: list, queried_uni: str, min_doc
     if matched_docs:
         return [d for d, _ in matched_docs], [s for _, s in matched_docs]
 
+    # For coaching queries, return empty list to trigger "not found" response
+    if queried_uni == "coaching":
+        return [], []
+
     # Fallback: return top docs by original score (but warn this is not ideal)
     return docs[:min_docs], scores[:min_docs]
 
 
 # ============================================================
-# ENTITY-AWARE QUERY DECOMPOSITION
-# For multi-institution queries, decompose into sub-queries
-# to avoid cross-entity dilution in retrieval
+# ENHANCED ENTITY-AWARE QUERY DECOMPOSITION v2.0
+# For multi-institution queries:
+# 1. Detect entities (fixed for Bengali)
+# 2. Decompose into sub-queries
+# 3. Parallel retrieval per entity with allocated budget
+# 4. Deduplicate + Ensure coverage + Re-rank
+# 5. Guaranteed minimum per entity
 # ============================================================
+
+def detect_query_intent(query: str) -> str:
+    """
+    Detect what type of information the query is asking for.
+    This helps optimize retrieval parameters for specific intents.
+
+    Returns: 'date', 'fee', 'eligibility', 'seat', 'admit_card', 'website', or 'general'
+    """
+    import re
+    query_lower = query.lower()
+
+    intent_patterns = {
+        'date': [
+            r'তারিখ', r'কবে', r'কখন', r'when', r'date', r'সময়সূচী', r'schedule',
+            r'শুরু', r'শেষ', r'deadline', r'last\s*date', r'সময়',
+            r'জানুয়ারি|ফেব্রুয়ারি|মার্চ|এপ্রিল|মে|জুন|জুলাই|আগস্ট|সেপ্টেম্বর|অক্টোবর|নভেম্বর|ডিসেম্বর',
+            r'january|february|march|april|may|june|july|august|september|october|november|december',
+        ],
+        'fee': [
+            r'ফি', r'টাকা', r'fee', r'কত টাকা', r'খরচ', r'payment', r'আবেদন ফি',
+            r'application\s*fee', r'পরিশোধ', r'বেতন',
+        ],
+        'eligibility': [
+            r'যোগ্যতা', r'eligibility', r'requirement', r'শর্ত', r'criteria',
+            r'জিপিএ', r'gpa', r'পয়েন্ট', r'গ্রেড', r'grade', r'পাস', r'নম্বর',
+        ],
+        'seat': [
+            r'আসন', r'seat', r'সংখ্যা', r'কতজন', r'কত জন', r'vacancy', r'আসন সংখ্যা',
+        ],
+        'admit_card': [
+            r'প্রবেশপত্র', r'admit\s*card', r'এডমিট', r'প্রবেশ পত্র', r'হল টিকেট',
+            r'roll', r'রোল', r'ডাউনলোড',
+        ],
+        'website': [
+            r'ওয়েবসাইট', r'website', r'লিংক', r'link', r'url', r'অনলাইন',
+        ],
+        'exam': [
+            r'পরীক্ষা', r'exam', r'test', r'mcq', r'লিখিত', r'written',
+        ],
+    }
+
+    # Check patterns in priority order
+    for intent, patterns in intent_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, query_lower):
+                return intent
+
+    return 'general'
+
 
 def detect_entities_in_query(query: str) -> list:
     """
     Detect institution entities in query.
     Returns list of (entity_abbrev, entity_full_name) tuples.
+
+    FIXED: Bengali text detection now uses substring matching instead of word boundaries,
+    since \\b doesn't work properly with Bengali script.
     """
     import re
     query_lower = query.lower()
 
-    # Entity patterns with their canonical names
+    # Entity patterns: (bengali_terms, english_regex, abbrev, full_name)
+    # Bengali terms use substring matching, English uses regex with word boundaries
     entity_patterns = [
-        # Universities
-        (r'\bjnu\b|জগন্নাথ|জবি', 'jnu', 'জগন্নাথ বিশ্ববিদ্যালয় (JNU)'),
-        (r'\bju\b|জাহাঙ্গীরনগর|জাবি', 'ju', 'জাহাঙ্গীরনগর বিশ্ববিদ্যালয় (JU)'),
-        (r'\bku\b|খুলনা বিশ্ববিদ্যালয়|খুবি', 'ku', 'খুলনা বিশ্ববিদ্যালয় (KU)'),
-        (r'\bru\b|রাজশাহী বিশ্ববিদ্যালয়|রাবি', 'ru', 'রাজশাহী বিশ্ববিদ্যালয় (RU)'),
-        (r'\bcu\b|চট্টগ্রাম বিশ্ববিদ্যালয়|চবি', 'cu', 'চট্টগ্রাম বিশ্ববিদ্যালয় (CU)'),
-        (r'\bdu\b|ঢাকা বিশ্ববিদ্যালয়|ঢাবি', 'du', 'ঢাকা বিশ্ববিদ্যালয় (DU)'),
-        (r'\bbu\b|বরিশাল বিশ্ববিদ্যালয়|ববি', 'bu', 'বরিশাল বিশ্ববিদ্যালয় (BU)'),
-        # Engineering Universities
-        (r'\bbuet\b|বুয়েট', 'buet', 'বুয়েট (BUET)'),
-        (r'\bkuet\b|কুয়েট', 'kuet', 'কুয়েট (KUET)'),
-        (r'\bruet\b|রুয়েট', 'ruet', 'রুয়েট (RUET)'),
-        (r'\bcuet\b|চুয়েট', 'cuet', 'চুয়েট (CUET)'),
+        # Engineering Universities (check first - more specific)
+        (['কুয়েট', 'খুলনা প্রকৌশল'], r'\bkuet\b', 'kuet', 'খুলনা প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় (KUET)'),
+        (['রুয়েট', 'রাজশাহী প্রকৌশল'], r'\bruet\b', 'ruet', 'রাজশাহী প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় (RUET)'),
+        (['চুয়েট', 'চট্টগ্রাম প্রকৌশল'], r'\bcuet\b', 'cuet', 'চট্টগ্রাম প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় (CUET)'),
+        (['বুয়েট', 'বাংলাদেশ প্রকৌশল'], r'\bbuet\b', 'buet', 'বাংলাদেশ প্রকৌশল বিশ্ববিদ্যালয় (BUET)'),
+        (['ডুয়েট', 'ঢাকা প্রকৌশল'], r'\bduet\b', 'duet', 'ঢাকা প্রকৌশল ও প্রযুক্তি বিশ্ববিদ্যালয় (DUET)'),
+
+        # Public Universities
+        (['জগন্নাথ', 'জবি'], r'\bjnu\b', 'jnu', 'জগন্নাথ বিশ্ববিদ্যালয় (JNU)'),
+        (['জাহাঙ্গীরনগর', 'জাবি'], r'\bju\b', 'ju', 'জাহাঙ্গীরনগর বিশ্ববিদ্যালয় (JU)'),
+        (['খুলনা বিশ্ববিদ্যালয়', 'খুবি'], r'\bku\b', 'ku', 'খুলনা বিশ্ববিদ্যালয় (KU)'),
+        (['রাজশাহী বিশ্ববিদ্যালয়', 'রাবি'], r'\bru\b', 'ru', 'রাজশাহী বিশ্ববিদ্যালয় (RU)'),
+        (['চট্টগ্রাম বিশ্ববিদ্যালয়', 'চবি'], r'\bcu\b', 'cu', 'চট্টগ্রাম বিশ্ববিদ্যালয় (CU)'),
+        (['ঢাকা বিশ্ববিদ্যালয়', 'ঢাবি'], r'\bdu\b', 'du', 'ঢাকা বিশ্ববিদ্যালয় (DU)'),
+        (['বরিশাল বিশ্ববিদ্যালয়', 'ববি'], r'\bbu\b', 'bu', 'বরিশাল বিশ্ববিদ্যালয় (BU)'),
+
+        # Science & Technology Universities
+        (['শাহজালাল', 'সাস্ট', 'শাবি'], r'\bsust\b', 'sust', 'শাহজালাল বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় (SUST)'),
+        (['হাজী দানেশ', 'hstu'], r'\bhstu\b', 'hstu', 'হাজী মোহাম্মদ দানেশ বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় (HSTU)'),
+        (['পটুয়াখালী', 'পবিপ্রবি'], r'\bpstu\b', 'pstu', 'পটুয়াখালী বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় (PSTU)'),
+        (['নোয়াখালী', 'নোবিপ্রবি'], r'\bnstu\b', 'nstu', 'নোয়াখালী বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় (NSTU)'),
+        (['যশোর', 'যবিপ্রবি'], r'\bjust\b', 'just', 'যশোর বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় (JUST)'),
+
         # Special Institutions
-        (r'\bmist\b|মিলিটারি ইনস্টিটিউট', 'mist', 'MIST (মিলিটারি ইনস্টিটিউট অব সায়েন্স অ্যান্ড টেকনোলজি)'),
-        (r'\bmedical\b|মেডিকেল|mbbs|bds', 'medical', 'মেডিকেল (MBBS/BDS)'),
-        (r'\bsust\b|শাহজালাল|শাবি', 'sust', 'শাহজালাল বিজ্ঞান ও প্রযুক্তি বিশ্ববিদ্যালয় (SUST)'),
-        (r'\bbsmmu\b|বঙ্গবন্ধু শেখ মুজিব মেডিকেল', 'bsmmu', 'বঙ্গবন্ধু শেখ মুজিব মেডিকেল বিশ্ববিদ্যালয় (BSMMU)'),
+        (['মিস্ট', 'মিলিটারি ইনস্টিটিউট'], r'\bmist\b', 'mist', 'মিলিটারি ইনস্টিটিউট অব সায়েন্স অ্যান্ড টেকনোলজি (MIST)'),
+        (['মেডিকেল', 'এমবিবিএস', 'বিডিএস'], r'\bmedical\b|\bmbbs\b|\bbds\b', 'medical', 'মেডিকেল (MBBS/BDS)'),
+        (['বঙ্গবন্ধু শেখ মুজিব মেডিকেল', 'বিএসএমএমইউ'], r'\bbsmmu\b', 'bsmmu', 'বঙ্গবন্ধু শেখ মুজিব মেডিকেল বিশ্ববিদ্যালয় (BSMMU)'),
+
+        # GST (Combined admission)
+        (['গুচ্ছ', 'জিএসটি'], r'\bgst\b|guccho', 'gst', 'গুচ্ছ ভর্তি পরীক্ষা (GST)'),
     ]
 
     detected = []
-    for pattern, abbrev, full_name in entity_patterns:
-        if re.search(pattern, query_lower):
+    detected_abbrevs = set()  # Avoid duplicates
+
+    for bengali_terms, english_regex, abbrev, full_name in entity_patterns:
+        if abbrev in detected_abbrevs:
+            continue
+
+        # Check Bengali terms via substring matching (works with Bengali script)
+        bengali_match = any(term in query for term in bengali_terms)
+
+        # Check English terms via regex with word boundaries
+        english_match = bool(re.search(english_regex, query_lower))
+
+        if bengali_match or english_match:
             detected.append((abbrev, full_name))
+            detected_abbrevs.add(abbrev)
 
     return detected
+
+
+def get_intent_retrieval_params(intent: str) -> dict:
+    """
+    Get optimized retrieval parameters based on query intent.
+    Different intents need different retrieval strategies.
+    """
+    params = {
+        'date': {
+            'top_k': 15,           # Higher top_k to find date chunks
+            'bm25_weight': 0.55,   # Favor BM25 for keyword matching
+            'boost_keywords': ['তারিখ', 'সময়সূচী', 'জানুয়ারি', 'ফেব্রুয়ারি', 'ডিসেম্বর', 'নভেম্বর', '২০২৫', '২০২৬', 'শুরু', 'শেষ'],
+        },
+        'fee': {
+            'top_k': 12,
+            'bm25_weight': 0.5,
+            'boost_keywords': ['ফি', 'টাকা', 'আবেদন ফি', 'পরিশোধ', 'payment'],
+        },
+        'admit_card': {
+            'top_k': 12,
+            'bm25_weight': 0.5,
+            'boost_keywords': ['প্রবেশপত্র', 'admit card', 'ডাউনলোড', 'প্রবেশ পত্র'],
+        },
+        'eligibility': {
+            'top_k': 10,
+            'bm25_weight': 0.4,
+            'boost_keywords': ['যোগ্যতা', 'শর্ত', 'জিপিএ', 'requirement'],
+        },
+        'seat': {
+            'top_k': 10,
+            'bm25_weight': 0.45,
+            'boost_keywords': ['আসন', 'সংখ্যা', 'seat'],
+        },
+        'general': {
+            'top_k': 10,
+            'bm25_weight': 0.35,
+            'boost_keywords': [],
+        },
+    }
+    return params.get(intent, params['general'])
 
 
 def decompose_query_with_gpt4o_mini(query: str, entities: list) -> list:
@@ -944,79 +1151,454 @@ def decompose_multi_entity_query(query: str, entities: list) -> list:
         return decompose_query_rule_based(query, entities)
 
 
+# ============================================================
+# RECIPROCAL RANK FUSION (RRF) IMPLEMENTATION
+# Combines results from multiple retrieval methods
+# ============================================================
+
+def reciprocal_rank_fusion(ranked_lists: list, k: int = 60) -> list:
+    """
+    Implement Reciprocal Rank Fusion (RRF) to combine multiple ranked lists.
+
+    RRF Formula: score(d) = Σ 1/(k + rank(d))
+
+    Args:
+        ranked_lists: List of lists, each containing (doc_id, doc_content, original_score) tuples
+                      ordered by rank (best first)
+        k: Constant to prevent high scores for top-ranked docs (default 60)
+
+    Returns:
+        List of (doc_content, rrf_score) tuples sorted by RRF score descending
+    """
+    doc_scores = {}  # doc_content -> rrf_score
+    doc_best_original = {}  # doc_content -> best original score (for tie-breaking)
+
+    for ranked_list in ranked_lists:
+        for rank, item in enumerate(ranked_list, start=1):
+            if len(item) >= 2:
+                doc_content = item[1] if len(item) > 1 else item[0]
+                original_score = item[2] if len(item) > 2 else 0.0
+            else:
+                doc_content = item[0]
+                original_score = 0.0
+
+            # RRF score contribution from this list
+            rrf_contribution = 1.0 / (k + rank)
+
+            if doc_content not in doc_scores:
+                doc_scores[doc_content] = 0.0
+                doc_best_original[doc_content] = 0.0
+
+            doc_scores[doc_content] += rrf_contribution
+            doc_best_original[doc_content] = max(doc_best_original[doc_content], original_score)
+
+    # Sort by RRF score, then by original score for tie-breaking
+    sorted_docs = sorted(
+        doc_scores.items(),
+        key=lambda x: (x[1], doc_best_original.get(x[0], 0)),
+        reverse=True
+    )
+
+    return [(doc, score) for doc, score in sorted_docs]
+
+
+def deduplicate_docs(docs: list, scores: list, similarity_threshold: float = 0.9) -> tuple:
+    """
+    Remove near-duplicate documents based on content similarity.
+    Uses simple Jaccard similarity on word sets for efficiency.
+
+    Returns: (deduplicated_docs, deduplicated_scores)
+    """
+    if not docs:
+        return [], []
+
+    def get_word_set(text) -> set:
+        # Simple tokenization for Bengali + English
+        # Ensure text is a string
+        import re
+        if not isinstance(text, str):
+            text = str(text)
+        words = re.findall(r'\w+', text.lower())
+        return set(words)
+
+    def jaccard_similarity(set1: set, set2: set) -> float:
+        if not set1 or not set2:
+            return 0.0
+        intersection = len(set1 & set2)
+        union = len(set1 | set2)
+        return intersection / union if union > 0 else 0.0
+
+    unique_docs = []
+    unique_scores = []
+    seen_word_sets = []
+
+    for i, doc in enumerate(docs):
+        doc_words = get_word_set(doc[:500])  # Only compare first 500 chars for efficiency
+
+        is_duplicate = False
+        for seen_words in seen_word_sets:
+            if jaccard_similarity(doc_words, seen_words) > similarity_threshold:
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            unique_docs.append(doc)
+            unique_scores.append(scores[i] if i < len(scores) else 0.0)
+            seen_word_sets.append(doc_words)
+
+    return unique_docs, unique_scores
+
+
+def ensure_minimum_coverage(entity_results: dict, min_docs_per_entity: int = 3) -> dict:
+    """
+    Ensure each entity has minimum document coverage.
+    Adds coverage warnings for entities with insufficient results.
+
+    Returns: Updated entity_results with coverage metadata
+    """
+    for abbrev, data in entity_results.items():
+        num_docs = len(data.get('docs', []))
+        data['coverage_count'] = num_docs
+        data['coverage_sufficient'] = num_docs >= min_docs_per_entity
+
+        if num_docs == 0:
+            data['coverage_warning'] = f"⚠️ No documents found for {data['entity_name']}"
+        elif num_docs < min_docs_per_entity:
+            data['coverage_warning'] = f"⚠️ Only {num_docs} documents found for {data['entity_name']} (minimum: {min_docs_per_entity})"
+        else:
+            data['coverage_warning'] = None
+
+    return entity_results
+
+
 async def run_decomposed_retrieval(hipporag, sub_queries: list, original_question: str) -> dict:
     """
-    Run retrieval independently for each sub-query and collect results.
+    ENHANCED: Run retrieval independently for each sub-query with:
+    1. Intent-aware retrieval parameters
+    2. Two-pass retrieval (semantic + BM25 boosted)
+    3. RRF fusion of results
+    4. Deduplication
+    5. Guaranteed minimum coverage per entity
 
-    Returns dict: {entity_abbrev: {'docs': [...], 'scores': [...], 'answer': str}}
+    Returns dict: {entity_abbrev: {'docs': [...], 'scores': [...], 'entity_name': str, ...}}
     """
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     import asyncio
+    import time
+
+    # Detect query intent for optimized retrieval
+    intent = detect_query_intent(original_question)
+    intent_params = get_intent_retrieval_params(intent)
+
+    print(f"\n      🎯 Query Intent: {intent}")
+    print(f"      📊 Retrieval Params: top_k={intent_params['top_k']}, bm25_weight={intent_params['bm25_weight']}")
+    if intent_params['boost_keywords']:
+        print(f"      🔑 Boost Keywords: {intent_params['boost_keywords'][:5]}...")
 
     results = {}
 
-    for abbrev, full_name, sub_query in sub_queries:
+    # Ensure hipporag is ready
+    if not hipporag.ready_to_retrieve:
+        hipporag.prepare_retrieval_objects()
+
+    def retrieve_for_entity(entity_info: tuple) -> tuple:
+        """Worker function for parallel retrieval per entity"""
+        abbrev, full_name, sub_query = entity_info
+        entity_start = time.time()
+
         # Special handling for medical admit card queries
-        # The medical document uses specific terms that need to be included
         if abbrev == 'medical' and ('admit' in sub_query.lower() or 'প্রবেশ' in sub_query or 'এডমিট' in sub_query):
             sub_query = sub_query + " এমবিবিএস বিডিএস ভর্তি পরীক্ষা কার্যক্রম প্রবেশ পত্র ডাউনলোড dgme"
 
-        # Expand the sub-query
+        # ===== PASS 1: Standard semantic retrieval =====
         expanded_query = expand_query(sub_query)
-        print(f"      📝 Sub-query: \"{sub_query}\"")
-        if expanded_query != sub_query:
-            print(f"      ✓ Expanded: \"{expanded_query[:150]}...\"")
 
-        # Run retrieval
-        if not hipporag.ready_to_retrieve:
-            hipporag.prepare_retrieval_objects()
-
-        query_solutions_retrieved = hipporag.retrieve(queries=[expanded_query])
-
-        if query_solutions_retrieved and len(query_solutions_retrieved) > 0:
-            qs = query_solutions_retrieved[0]
-            docs = qs.docs if qs.docs else []
-            scores = list(qs.doc_scores) if qs.doc_scores is not None else []
-
-            # Apply entity-specific filtering
-            if abbrev in UNIVERSITY_FILTER_PATTERNS:
-                docs, scores = filter_documents_by_university(docs, scores, abbrev)
-
-            # Special filtering for medical documents
-            if abbrev == 'medical':
-                medical_docs = []
-                medical_scores = []
-                medical_keywords = ['মেডিকেল', 'medical', 'mbbs', 'bds', 'এমবিবিএস', 'বিডিএস', 'dgme', 'স্বাস্থ্য শিক্ষা']
-                for i, doc in enumerate(docs):
-                    doc_lower = doc.lower()
-                    if any(kw.lower() in doc_lower for kw in medical_keywords):
-                        medical_docs.append(doc)
-                        medical_scores.append(scores[i] if i < len(scores) else 0.0)
-                if medical_docs:
-                    docs = medical_docs
-                    scores = medical_scores
-
-            results[abbrev] = {
-                'entity_name': full_name,
-                'docs': docs[:10],  # Top 10 per entity
-                'scores': scores[:10],
-                'sub_query': sub_query,
-            }
+        # Add intent-specific boost keywords to query for BM25
+        if intent_params['boost_keywords']:
+            boost_terms = ' '.join(intent_params['boost_keywords'][:5])
+            boosted_query = f"{expanded_query} {boost_terms}"
         else:
-            results[abbrev] = {
-                'entity_name': full_name,
-                'docs': [],
-                'scores': [],
-                'sub_query': sub_query,
-            }
+            boosted_query = expanded_query
+
+        semantic_docs = []
+        semantic_scores = []
+
+        try:
+            query_solutions = hipporag.retrieve(queries=[boosted_query])
+            if query_solutions and len(query_solutions) > 0:
+                qs = query_solutions[0]
+                # Ensure docs are strings (not numpy.int64 or other types)
+                raw_docs = list(qs.docs) if qs.docs else []
+                semantic_docs = [str(doc) if not isinstance(doc, str) else doc for doc in raw_docs]
+                semantic_scores = list(qs.doc_scores) if qs.doc_scores is not None else []
+        except Exception as e:
+            print(f"      ❌ Semantic retrieval error for {abbrev}: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # ===== PASS 2: BM25-focused retrieval (for date/fee queries) =====
+        bm25_docs = []
+        bm25_scores = []
+
+        if intent in ['date', 'fee', 'admit_card'] and hasattr(hipporag, 'bm25_retriever') and hipporag.bm25_retriever:
+            try:
+                # Build keyword-heavy query for BM25 - use schedule-specific terms
+                keyword_query = f"{full_name} {sub_query}"
+                if intent == 'date':
+                    # Add exact phrases from schedule tables to boost retrieval
+                    keyword_query += " ভর্তি পরীক্ষার তারিখ ও সময় সময়সূচী ভর্তি সংক্রান্ত সময়সূচী"
+                elif intent == 'fee':
+                    keyword_query += " ফি টাকা আবেদন ফি পরিশোধ payment প্রদেয় ফি"
+                elif intent == 'admit_card':
+                    keyword_query += " প্রবেশপত্র admit card ডাউনলোড প্রবেশপত্র ডাউনলোড শুরু"
+
+                bm25_results = hipporag.bm25_retriever.search(keyword_query, top_k=intent_params['top_k'])
+                if bm25_results is not None and len(bm25_results) == 2:
+                    doc_ids, scores = bm25_results
+                    # Get actual document content from doc IDs
+                    bm25_docs = []
+                    bm25_scores = []
+                    for i, doc_id in enumerate(doc_ids):
+                        try:
+                            # Get document content from the BM25 retriever's document list
+                            if hasattr(hipporag.bm25_retriever, 'documents') and doc_id < len(hipporag.bm25_retriever.documents):
+                                doc_content = hipporag.bm25_retriever.documents[doc_id]
+                                if isinstance(doc_content, str) and len(doc_content) > 0:
+                                    bm25_docs.append(doc_content)
+                                    bm25_scores.append(float(scores[i]) if i < len(scores) else 0.0)
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"      ⚠️ BM25 retrieval skipped for {abbrev}: {e}")
+
+        # ===== RRF FUSION of both passes =====
+        # Build ranked lists for RRF
+        ranked_lists = []
+
+        if semantic_docs:
+            semantic_ranked = [(i, doc, semantic_scores[i] if i < len(semantic_scores) else 0.0)
+                              for i, doc in enumerate(semantic_docs[:intent_params['top_k']])]
+            ranked_lists.append(semantic_ranked)
+
+        if bm25_docs:
+            bm25_ranked = [(i, doc, bm25_scores[i] if i < len(bm25_scores) else 0.0)
+                          for i, doc in enumerate(bm25_docs[:intent_params['top_k']])]
+            ranked_lists.append(bm25_ranked)
+
+        # Apply RRF if we have multiple lists, otherwise use semantic results
+        if len(ranked_lists) > 1:
+            fused_results = reciprocal_rank_fusion(ranked_lists, k=60)
+            all_docs = [doc for doc, score in fused_results]
+            all_scores = [score for doc, score in fused_results]
+            fusion_method = "RRF"
+        elif semantic_docs:
+            all_docs = semantic_docs
+            all_scores = semantic_scores
+            fusion_method = "Semantic"
+        else:
+            all_docs = []
+            all_scores = []
+            fusion_method = "None"
+
+        # ===== ENTITY-SPECIFIC FILTERING =====
+        if abbrev in UNIVERSITY_FILTER_PATTERNS and all_docs:
+            all_docs, all_scores = filter_documents_by_university(all_docs, all_scores, abbrev)
+
+        # Special filtering for medical documents
+        if abbrev == 'medical' and all_docs:
+            medical_docs = []
+            medical_scores = []
+            medical_keywords = ['মেডিকেল', 'medical', 'mbbs', 'bds', 'এমবিবিএস', 'বিডিএস', 'dgme', 'স্বাস্থ্য শিক্ষা']
+            for i, doc in enumerate(all_docs):
+                doc_str = str(doc) if not isinstance(doc, str) else doc
+                doc_lower = doc_str.lower()
+                if any(kw.lower() in doc_lower for kw in medical_keywords):
+                    medical_docs.append(doc_str)
+                    medical_scores.append(all_scores[i] if i < len(all_scores) else 0.0)
+            if medical_docs:
+                all_docs = medical_docs
+                all_scores = medical_scores
+
+        # ===== SCHEDULE PRIORITIZATION for date queries =====
+        # Boost chunks that contain schedule tables with actual exam dates
+        if intent == 'date' and all_docs:
+            import re
+            schedule_indicators = ['সময়সূচী', 'পরীক্ষার তারিখ ও সময়', 'পরীক্ষার তারিখ', 'ভর্তি সংক্রান্ত সময়সূচী']
+            date_pattern = re.compile(r'[০-৯]{1,2}\s*(জানুয়ার|ফেব্রুয়ার|ডিসেম্বর|নভেম্বর).*২০২[৫৬]')
+
+            scored_docs = []
+            for i, doc in enumerate(all_docs):
+                doc_str = str(doc) if not isinstance(doc, str) else doc
+                score = all_scores[i] if i < len(all_scores) else 0.0
+
+                # Calculate priority boost
+                priority = 0
+                if any(ind in doc_str for ind in schedule_indicators):
+                    priority += 2  # Has schedule indicator
+                if date_pattern.search(doc_str):
+                    priority += 3  # Has actual date
+                if 'ছ)' in doc_str or '(ছ)' in doc_str:  # Schedule row marker
+                    priority += 1
+
+                scored_docs.append((doc_str, score, priority))
+
+            # Sort by priority first, then by score
+            scored_docs.sort(key=lambda x: (x[2], x[1]), reverse=True)
+            all_docs = [d[0] for d in scored_docs]
+            all_scores = [d[1] for d in scored_docs]
+
+        # ===== DEDUPLICATION =====
+        if all_docs:
+            all_docs, all_scores = deduplicate_docs(all_docs, all_scores, similarity_threshold=0.85)
+
+        elapsed = time.time() - entity_start
+
+        return (abbrev, {
+            'entity_name': full_name,
+            'docs': all_docs[:12],  # Top 12 per entity (increased from 10)
+            'scores': all_scores[:12],
+            'sub_query': sub_query,
+            'fusion_method': fusion_method,
+            'semantic_count': len(semantic_docs),
+            'bm25_count': len(bm25_docs),
+            'retrieval_time': elapsed,
+        })
+
+    # ===== PARALLEL RETRIEVAL =====
+    print(f"\n      🚀 Starting parallel retrieval for {len(sub_queries)} entities...")
+
+    # Use ThreadPoolExecutor for parallel retrieval
+    with ThreadPoolExecutor(max_workers=min(len(sub_queries), 4)) as executor:
+        futures = {executor.submit(retrieve_for_entity, sq): sq for sq in sub_queries}
+
+        for future in as_completed(futures):
+            try:
+                abbrev, entity_data = future.result()
+                results[abbrev] = entity_data
+
+                # Log per-entity results
+                print(f"      ✅ {abbrev.upper()}: {len(entity_data['docs'])} docs "
+                      f"(semantic:{entity_data['semantic_count']}, bm25:{entity_data['bm25_count']}, "
+                      f"fusion:{entity_data['fusion_method']}) [{entity_data['retrieval_time']:.2f}s]")
+            except Exception as e:
+                sq = futures[future]
+                print(f"      ❌ Failed for {sq[0]}: {e}")
+                results[sq[0]] = {
+                    'entity_name': sq[1],
+                    'docs': [],
+                    'scores': [],
+                    'sub_query': sq[2],
+                    'error': str(e),
+                }
+
+    # ===== ENSURE MINIMUM COVERAGE =====
+    results = ensure_minimum_coverage(results, min_docs_per_entity=3)
+
+    # Log coverage warnings
+    for abbrev, data in results.items():
+        if data.get('coverage_warning'):
+            print(f"      {data['coverage_warning']}")
 
     return results
+
+
+def extract_exam_date_regex(docs: list, university_abbrev: str = None) -> str:
+    """
+    Deterministic slot extraction for exam dates - bypasses LLM for reliability.
+    Filters docs by university to avoid cross-contamination.
+    Returns the date string or None if not found.
+    """
+    import re
+
+    # University markers to filter documents
+    uni_markers = {
+        'KUET': ['kuet', 'কুয়েট', 'KUET', '[কুয়েট', 'admission.kuet.ac.bd'],
+        'CUET': ['cuet', 'চুয়েট', 'CUET', '[চুয়েট', 'চুয়েট ক্যাম্পাস'],
+        'RUET': ['ruet', 'রুয়েট', 'RUET', '[রুয়েট', 'admission.ruet.ac.bd'],
+        'BUET': ['buet', 'বুয়েট', 'BUET', '[বুয়েট', 'buet.ac.bd'],
+    }
+
+    # Markers to EXCLUDE (other universities)
+    exclude_markers = {
+        'KUET': uni_markers.get('BUET', []) + uni_markers.get('CUET', []) + uni_markers.get('RUET', []),
+        'CUET': uni_markers.get('BUET', []) + uni_markers.get('KUET', []) + uni_markers.get('RUET', []),
+        'RUET': uni_markers.get('BUET', []) + uni_markers.get('KUET', []) + uni_markers.get('CUET', []),
+        'BUET': uni_markers.get('KUET', []) + uni_markers.get('CUET', []) + uni_markers.get('RUET', []),
+    }
+
+    def doc_belongs_to_university(doc_str: str, abbrev: str) -> bool:
+        """Check if document belongs to the target university and NOT to others."""
+        # Normalize abbreviation to uppercase to match uni_markers keys
+        abbrev_upper = abbrev.upper()
+        if abbrev_upper not in uni_markers:
+            print(f"   ⚠️ FILTER: Unknown university '{abbrev}', skipping filter")
+            return True  # No filter if unknown university
+
+        doc_lower = doc_str.lower()
+
+        # Check for exclusion markers first - if another university is mentioned, skip this doc
+        for exclude_marker in exclude_markers.get(abbrev_upper, []):
+            if exclude_marker.lower() in doc_lower:
+                print(f"   🚫 FILTER: Excluding doc for {abbrev_upper} - found exclusion marker '{exclude_marker}'")
+                return False
+
+        # Check if target university markers are present
+        for marker in uni_markers[abbrev_upper]:
+            if marker.lower() in doc_lower:
+                print(f"   ✅ FILTER: Accepting doc for {abbrev_upper} - found marker '{marker}'")
+                return True
+
+        print(f"   ⚠️ FILTER: Accepting doc for {abbrev_upper} by default (no markers found)")
+        return True  # Default: use doc if no exclusion markers found (could be untagged CUET doc)
+
+    for doc in docs[:10]:  # Check more docs since we're filtering
+        doc_str = str(doc) if not isinstance(doc, str) else doc
+
+        # Filter by university if specified
+        if university_abbrev and not doc_belongs_to_university(doc_str, university_abbrev):
+            continue  # Skip docs that don't belong to this university
+
+        # Pattern 1: KUET/RUET format - "ছ) | ভর্তি পরীক্ষার তারিখ ও সময় | ১৫ জানুয়ারী, ২০২৬"
+        match = re.search(r'ছ\)\s*\|\s*ভর্তি পরীক্ষার তারিখ[^|]*\|\s*([০-৯]{1,2}\s*জানুয়ার[ীি]?,?\s*২০২[৫৬][^|]*)', doc_str)
+        if match:
+            date = match.group(1).strip()
+            # Clean up <br> tags and get just the date part
+            date = date.replace('<br>', ', ').split('|')[0].strip()
+            # Extract just date and day
+            date_match = re.match(r'([০-৯]{1,2}\s*জানুয়ার[ীি]?,?\s*২০২[৫৬]\s*ইং?,?\s*[বৃহস্পতিশনিসোমমঙ্গলবুধ]*)', date)
+            if date_match:
+                print(f"   📅 DATE EXTRACTED (Pattern 1 - KUET/RUET): {date_match.group(1).strip()}")
+                return date_match.group(1).strip()
+            print(f"   📅 DATE EXTRACTED (Pattern 1 - raw): {date}")
+            return date
+
+        # Pattern 2: CUET format - "১৭ জানুয়ারী ২০২৬ ইং তারিখ (শনিবার)"
+        match = re.search(r'([০-৯]{1,2}\s*জানুয়ার[ীি]?\s*২০২[৫৬]\s*ইং?\s*তারিখ\s*\([^)]+\))', doc_str)
+        if match:
+            print(f"   📅 DATE EXTRACTED (Pattern 2 - CUET): {match.group(1).strip()}")
+            return match.group(1).strip()
+
+        # Pattern 3: BUET format - "৬। ভর্তি পরীক্ষা | ১০ জানুয়ারি ২০২৬"
+        match = re.search(r'[৬6]।?\s*ভর্তি পরীক্ষা\s*\|\s*([০-৯]{1,2}\s*জানুয়ার[ীি]?\s*২০২[৫৬][^|]*)', doc_str)
+        if match:
+            date = match.group(1).strip()
+            result = date.replace('<br>', ', ').split('|')[0].strip()
+            print(f"   📅 DATE EXTRACTED (Pattern 3 - BUET): {result}")
+            return result
+
+        # Pattern 4: Generic - look for date near "ভর্তি পরীক্ষার তারিখ"
+        match = re.search(r'ভর্তি পরীক্ষার তারিখ[^০-৯]{0,30}([০-৯]{1,2}\s*জানুয়ার[ীি]?\s*২০২[৫৬])', doc_str)
+        if match:
+            print(f"   📅 DATE EXTRACTED (Pattern 4 - Generic): {match.group(1).strip()}")
+            return match.group(1).strip()
+
+    return None
 
 
 def build_slot_aware_answer(hipporag, original_question: str, entity_results: dict, question_type: str = "admit_card") -> str:
     """
     Build a structured answer by synthesizing results from each entity.
-    Uses slot-aware logic: if info found → show it, else → "নির্দিষ্ট তথ্য নেই"
+    Uses LLM for all query types.
     """
 
     # Combine all docs for LLM context, grouped by entity
@@ -1027,30 +1609,39 @@ def build_slot_aware_answer(hipporag, original_question: str, entity_results: di
         if docs:
             combined_context.append(f"\n### {entity_name} সম্পর্কিত তথ্য:\n")
             for i, doc in enumerate(docs[:5]):  # Top 5 per entity
-                combined_context.append(f"[{entity_name} Doc {i+1}]: {doc[:800]}\n")
+                # Increased from 800 to 1500 chars to include schedule tables with exam dates
+                combined_context.append(f"[{entity_name} Doc {i+1}]: {doc[:1500]}\n")
 
     if not combined_context:
         return generate_contextual_not_found_response(original_question)
 
-    # Build the prompt for slot-aware synthesis
-    entity_list = ", ".join([data['entity_name'] for data in entity_results.values()])
-
-    synthesis_prompt = f"""নিচে বিভিন্ন প্রতিষ্ঠানের তথ্য দেওয়া হলো। প্রশ্ন: "{original_question}"
+    # Build the prompt for slot-aware synthesis based on question type
+    if question_type == 'date':
+        synthesis_prompt = f"""প্রশ্ন: "{original_question}"
 
 {''.join(combined_context)}
 
-উপরের তথ্যের ভিত্তিতে নিচের প্রতিষ্ঠানগুলোর জন্য টেবিল আকারে উত্তর দিন:
-{entity_list}
+উপরের ডকুমেন্ট থেকে প্রতিটি বিশ্ববিদ্যালয়ের ভর্তি পরীক্ষার তারিখ বের করুন।
 
-🚫 কঠোর নিয়ম (অবশ্যই মানতে হবে):
-1. শুধুমাত্র উপরের প্যাসেজে হুবহু যে তারিখ/তথ্য আছে সেটাই লিখুন
-2. কোনো তারিখ বা তথ্য অনুমান করে তৈরি করবেন না - এটি সম্পূর্ণ নিষিদ্ধ
-3. প্যাসেজে "প্রবেশ পত্র" বা "Admit Card" এর তারিখ না থাকলে অবশ্যই লিখুন: "নির্দিষ্ট তথ্য নেই"
-4. একটি প্রতিষ্ঠানের তথ্য দিয়ে অন্য প্রতিষ্ঠানের উত্তর দেওয়া যাবে না
-5. ভুল তথ্য দেওয়ার চেয়ে "তথ্য পাওয়া যায়নি" লেখা অনেক ভালো
+গুরুত্বপূর্ণ নির্দেশনা:
+1. "ভর্তি পরীক্ষার তারিখ ও সময়" বা "ভর্তি পরীক্ষা" বা "ছ)" লেবেলের পরের তারিখটাই আসল পরীক্ষার তারিখ
+2. সতর্ক থাকুন! "তালিকা প্রকাশ", "প্রবেশপত্র ডাউনলোড", "আবেদন শেষ" - এগুলো পরীক্ষার তারিখ নয়!
+3. প্রতিটি ডকুমেন্টের শুরুতে ট্যাগ দেখে বিশ্ববিদ্যালয় চিনুন: [কুয়েট KUET], [রুয়েট RUET], [চুয়েট CUET], [বুয়েট BUET]
+4. শুধুমাত্র ট্যাগ অনুযায়ী সেই বিশ্ববিদ্যালয়ের তারিখ নিন। অন্য বিশ্ববিদ্যালয়ের তারিখ মেশাবেন না।
+5. ডকুমেন্টে পরীক্ষার তারিখ না পেলে "তথ্য পাওয়া যায়নি" বলুন।
 
-⚠️ মনে রাখুন: মিথ্যা তারিখ দিলে শিক্ষার্থীরা ক্ষতিগ্রস্ত হবে।
-"""
+উদাহরণ সঠিক ফরম্যাট: "ছ) | ভর্তি পরীক্ষার তারিখ ও সময় | ১৫ জানুয়ারী, ২০২৬" → উত্তর: ১৫ জানুয়ারী, ২০২৬
+
+টেবিল ফরম্যাটে উত্তর দিন:
+| বিশ্ববিদ্যালয় | পরীক্ষার তারিখ |
+|---|---|"""
+    else:
+        synthesis_prompt = f"""প্রশ্ন: "{original_question}"
+
+{''.join(combined_context)}
+
+উপরের ডকুমেন্ট থেকে প্রশ্নের উত্তর দিন। প্রতিটি বিশ্ববিদ্যালয়ের জন্য আলাদাভাবে তথ্য দিন।
+তথ্য না পেলে "তথ্য পাওয়া যায়নি" বলুন।"""
 
     # Use the QA LLM to generate the synthesized answer
     # Get the answer LLM from hipporag
@@ -1427,6 +2018,21 @@ def expand_query(query: str) -> str:
     if any(kw in query_lower for kw in apply_keywords):
         expanded_terms.append("আবেদন প্রক্রিয়া করণীয়")
 
+    # CRITICAL: মানবিক = অ-বিজ্ঞান শাখা (direct equivalence)
+    # Cross-encoder doesn't understand this, so we must expand
+    # Use 'in' to catch মানবিক, মানবিকের, মানবিকে etc.
+    if 'মানবিক' in query_lower or 'manobik' in query_lower or 'manbik' in query_lower:
+        expanded_terms.append("অ-বিজ্ঞান শাখা অ-বিজ্ঞান শাখার পরীক্ষার্থীদের আসন বণ্টন")
+
+    # বাণিজ্য = অ-বিজ্ঞান শাখা (direct equivalence)
+    if 'বাণিজ্য' in query_lower or 'banijjo' in query_lower or 'commerce' in query_lower:
+        expanded_terms.append("অ-বিজ্ঞান শাখা অ-বিজ্ঞান শাখার পরীক্ষার্থীদের আসন বণ্টন")
+
+    # Seat-related queries - expand with common seat terminology
+    seat_keywords = ['আসন', 'seat', 'ason', 'সংখ্যা', 'কত']
+    if any(kw in query_lower for kw in seat_keywords):
+        expanded_terms.append("আসন সংখ্যা আসন বণ্টন মোট আসন")
+
     if expanded_terms:
         # Add expansions to the original query
         expansion_text = " ".join(set(expanded_terms))  # Remove duplicates
@@ -1707,20 +2313,19 @@ def load_documents_from_folder(folder_path: str) -> List[str]:
                     if len(lines) > 1:
                         page_content = lines[1].strip()
                         if page_content:
-                            # Prepend university tag to ensure proper filtering
-                            if university_tag:
-                                page_content = f"{university_tag}\n{page_content}"
                             # Chunk if too large (increased to 3000 chars to prevent truncation)
                             chunks = chunk_text(page_content, max_chars=3000)
+                            # Add university tag to EVERY chunk (not just first one)
+                            if university_tag:
+                                chunks = [f"{university_tag}\n{chunk}" for chunk in chunks]
                             documents.extend(chunks)
         else:
             # No page markers, chunk the whole content
             if content.strip():
-                content_with_tag = content.strip()
-                # Prepend university tag to ensure proper filtering
+                # Chunk first, then add tag to EVERY chunk
+                chunks = chunk_text(content.strip(), max_chars=3000)
                 if university_tag:
-                    content_with_tag = f"{university_tag}\n{content_with_tag}"
-                chunks = chunk_text(content_with_tag, max_chars=3000)
+                    chunks = [f"{university_tag}\n{chunk}" for chunk in chunks]
                 documents.extend(chunks)
 
     print(f"Loaded {len(documents)} document chunks from {len(txt_files)} files")
@@ -1871,14 +2476,41 @@ async def ask_question(request: QuestionRequest):
         print("-"*80)
 
         # ============================================================
-        # STEP 1: Detect entities and decide on retrieval strategy
+        # EARLY CHECK: Coaching query detection (UDVASH/UNMESH/UTTORON)
+        # Return immediately if coaching query detected (no coaching data available)
+        # ============================================================
+        import re
+        query_lower = working_question.lower()
+        strong_coaching_patterns = [
+            r'\budvash\b', r'উদ্ভাস',
+            r'\bunmesh\b', r'উন্মেষ',
+            r'\buttoron\b', r'উত্তরণ',
+            r'medha.?britti', r'medhab', r'মেধাবৃত্তি',
+            r'কোচিং', r'coaching',
+            r'model.?test', r'মডেল.?টেস্ট',
+        ]
+        for pattern in strong_coaching_patterns:
+            if re.search(pattern, query_lower):
+                print(f"   🎓 COACHING QUERY DETECTED (pattern: {pattern})")
+                print(f"   ⚠️  No coaching data available, returning coaching-specific response")
+                coaching_not_found = "কোনো নির্দিষ্ট তথ্য বর্তমানে আমার কাছে নেই। উদ্ভাস-এর রুটিন বা কোর্স সম্পর্কিত যেকোনো তথ্যের জন্য অনুগ্রহ করে [https://udvash.com/HomePage](https://udvash.com/HomePage) ওয়েবসাইটটি দেখুন অথবা উদ্ভাস অফিসে যোগাযোগ করুন।"
+                return AnswerResponse(
+                    question=original_question,
+                    answer=coaching_not_found,
+                    references=[]
+                )
+
+        # ============================================================
+        # STEP 1: Detect entities and query intent
         # ============================================================
         print("🔍 STEP 1: Entity Detection")
         entity_start = time.time()
         detected_entities = detect_entities_in_query(working_question)
         num_entities = len(detected_entities)
+        query_intent = detect_query_intent(working_question)  # Detect intent for date/fee/etc.
         print(f"   ⏱️  Time: {time.time() - entity_start:.2f}s")
         print(f"   🏷️  Detected {num_entities} entities: {detected_entities}")
+        print(f"   🎯 Query Intent: {query_intent}")
         print("-"*80)
 
         # ============================================================
@@ -1905,9 +2537,9 @@ async def ask_question(request: QuestionRequest):
 
             # Step 4: Build slot-aware synthesized answer
             print("-"*80)
-            print("🤖 STEP 4: Answer Generation (Qwen3-80B)")
+            print("🤖 STEP 4: Answer Generation (GPT-4o-mini)")
             answer_start = time.time()
-            answer = build_slot_aware_answer(hipporag, working_question, entity_results)
+            answer = build_slot_aware_answer(hipporag, working_question, entity_results, question_type=query_intent)
             print(f"   ⏱️  Answer Generation Time: {time.time() - answer_start:.2f}s")
 
             # Collect references from all entities
@@ -1919,15 +2551,16 @@ async def ask_question(request: QuestionRequest):
                     all_scores.append(data['scores'][i] if i < len(data['scores']) else 0.5)
 
             # Build references
-            MIN_REFERENCE_SCORE = 0.4
+            # Note: RRF scores are typically in 0.01-0.05 range, so use low threshold
+            # We filter by having docs at all, not by score threshold
             references = []
             for i, doc in enumerate(all_docs[:10]):  # Max 10 references
                 score = float(all_scores[i]) if i < len(all_scores) else 0.0
-                if score >= MIN_REFERENCE_SCORE:
-                    references.append(Reference(
-                        content=doc[:1500] + "..." if len(doc) > 1500 else doc,
-                        score=score
-                    ))
+                # Include all retrieved docs as references (they've already been filtered/ranked)
+                references.append(Reference(
+                    content=doc[:1500] + "..." if len(doc) > 1500 else doc,
+                    score=max(score, 0.5)  # Normalize score for display (RRF scores are tiny)
+                ))
 
             # Final logging
             total_time = time.time() - request_start_time
@@ -2005,10 +2638,19 @@ async def ask_question(request: QuestionRequest):
                         qs.doc_scores = filtered_scores
                         print(f"   🔧 Strict University Filter ({queried_university.upper()}): {original_count} → {len(filtered_docs)} docs")
                     else:
+                        # For coaching queries with no matching docs, return specific response
+                        if queried_university == "coaching":
+                            print(f"   ⚠️  No coaching docs found, returning coaching-specific response")
+                            coaching_not_found = "কোনো নির্দিষ্ট তথ্য বর্তমানে আমার কাছে নেই। উদ্ভাস-এর রুটিন বা কোর্স সম্পর্কিত যেকোনো তথ্যের জন্য অনুগ্রহ করে [https://udvash.com/HomePage](https://udvash.com/HomePage) ওয়েবসাইটটি দেখুন অথবা উদ্ভাস অফিসে যোগাযোগ করুন।"
+                            return AnswerResponse(
+                                question=original_question,
+                                answer=coaching_not_found,
+                                references=[]
+                            )
                         print(f"   ⚠️  No docs matched {queried_university.upper()} filter, keeping original")
 
             # Step 5: Generate answer from filtered documents
-            print("   🤖 STEP 5: Answer Generation (Qwen3-80B)")
+            print("   🤖 STEP 5: Answer Generation (GPT-4o-mini)")
             qa_start = time.time()
             query_solutions, response_messages, metadata_list = hipporag.qa(query_solutions_retrieved)
             print(f"   ⏱️  QA Time: {time.time() - qa_start:.2f}s")

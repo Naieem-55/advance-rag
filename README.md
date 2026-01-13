@@ -213,6 +213,28 @@ When information is unavailable, the system provides category-specific guidance:
 
 ## Configuration
 
+### Model Switching
+
+The API server supports easy switching between different LLM providers for answer generation. Edit `api_server.py` line 28:
+
+```python
+ANSWER_MODEL = "qwen3-80b"  # Change this to switch models
+```
+
+**Available Presets:**
+
+| Preset | Model | Description |
+|--------|-------|-------------|
+| `gpt-4o-mini` | OpenAI GPT-4o-mini | Fast, cheap, good for testing |
+| `gpt-4o` | OpenAI GPT-4o | Slower, expensive, better quality |
+| `qwen3-80b` | Qwen3-next 80B (Ollama) | Local, free, 32K context |
+
+**Multi-Model Architecture:**
+- **NER/Triple Extraction**: GPT-4o (OpenAI) - accurate entity extraction
+- **Answer Generation**: Configurable via `ANSWER_MODEL`
+- **Embeddings**: multilingual-e5-large (local GPU)
+- **Reranking**: bge-reranker-v2-m3 (local CPU)
+
 ### HippoRAG Parameters
 
 | Parameter | Type | Default | Description |
