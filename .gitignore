@@ -24,3 +24,12 @@ data/
 clear_outputs_and_logs.sh
 # Ignore the env file
 .env
+
+# Ignore temp Claude files
+tmpclaude-*
+nul
+
+# Ignore virtual environment
+hipporag_env/
+venv/
+.venv/

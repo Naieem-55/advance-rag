@@ -19,13 +19,18 @@ load_dotenv()
 # =============================================================================
 # MODEL CONFIGURATION - Easy switching between different LLMs
 # =============================================================================
-# Change ANSWER_MODEL to switch between different answer generation models:
+# ANSWER_MODEL: For final answer generation (configurable)
+# Query decomposition & rewrite always use GPT-4o-mini (fast, cheap)
+#
+# Available presets:
 #   "gpt-4o-mini"  - OpenAI GPT-4o-mini (fast, cheap, good for testing)
 #   "gpt-4o"       - OpenAI GPT-4o (slower, expensive, better quality)
 #   "qwen3-80b"    - Qwen3-next 80B on local Ollama (slow, free, 32K context)
+#   "gpt-oss-20b"  - GPT-OSS 20B on local Ollama (faster, free)
+#   "gpt-oss-120b" - GPT-OSS 120B on local Ollama (best quality, slower)
 # =============================================================================
 
-ANSWER_MODEL = "qwen3-80b"  # <-- CHANGE THIS TO SWITCH MODELS
+ANSWER_MODEL = "gpt-oss-120b"  # <-- CHANGE THIS TO SWITCH ANSWER GENERATION MODEL
 
 # Model presets
 MODEL_PRESETS = {
@@ -43,6 +48,16 @@ MODEL_PRESETS = {
         "name": "qwen3-next:80b-a3b-instruct-q4_K_M",
         "base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
         "description": "Local Ollama, free, 32K context"
+    },
+    "gpt-oss-20b": {
+        "name": "gpt-oss:20b",
+        "base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
+        "description": "GPT-OSS 20B, local Ollama, faster"
+    },
+    "gpt-oss-120b": {
+        "name": "gpt-oss:120b",
+        "base_url": "http://192.168.2.54:11434/v1",  # Mac Ollama server
+        "description": "GPT-OSS 120B, local Ollama, best quality"
     },
 }
 
@@ -71,6 +86,7 @@ print("=" * 60)
 if USE_MULTI_MODEL:
     print("Multi-Model Mode ENABLED:")
     print(f"  NER/Triples: {MULTI_MODEL_CONFIG['reasoning_llm_name']} (OpenAI)")
+    print(f"  Utility:     gpt-4o-mini (OpenAI)")
     print(f"  Answers:     {MULTI_MODEL_CONFIG['answer_llm_name']}")
     print(f"  Fallback:    {MULTI_MODEL_CONFIG['fallback_llm_name']}")
 else:
@@ -2050,6 +2066,8 @@ def is_query_unclear(query: str) -> bool:
     - Missing context (e.g., "eta ki?", "bolo", "janao")
     - Banglish/romanized text that's hard to understand
     - Vague questions without specific entity or topic
+    - Repeated question words (কোথায় কোথায়, কি কি)
+    - Informal/colloquial language that doesn't match documents
     """
     import re
 
@@ -2062,27 +2080,500 @@ def is_query_unclear(query: str) -> bool:
 
     # Vague/unclear patterns (Banglish and Bangla)
     unclear_patterns = [
+        # Original patterns
         r'^(eta|ata|ota|eita)\s+(ki|kি|কি)\??$',  # "eta ki?"
         r'^(bolo|bolen|bolो|বলো|বলেন)\s*$',  # just "bolo"
         r'^(janao|janাo|জানাও)\s*$',  # just "janao"
         r'^(ki|কি)\s+(hobe|hবে|হবে)\??$',  # "ki hobe?"
-        r'^(kمn|kemon|কেমন)\s*\??$',  # just "kemon?"
+        r'^(kemon|কেমন)\s*\??$',  # just "kemon?"
         r'^(ar|আর)\s+(ki|কি)\??$',  # "ar ki?"
         r'^\?\s*$',  # just "?"
         r'^(hmm|hm|umm|ah|oh)\s*$',  # filler words
+
+        # NEW: Repeated question words (vague)
+        r'কোথায়\s+কোথায়',  # "কোথায় কোথায়" - where where
+        r'কি\s+কি',  # "কি কি" - what what
+        r'কেমন\s+কেমন',  # "কেমন কেমন" - how how
+        r'কবে\s+কবে',  # "কবে কবে" - when when
+        r'কত\s+কত',  # "কত কত" - how much how much
+
+        # NEW: Vague location/manner questions without specifics
+        r'^কোথায়\s+.{0,20}$',  # Short "কোথায়..." queries
+        r'^কিভাবে\s+.{0,15}$',  # Short "কিভাবে..." queries
+
+        # NEW: Informal verbs that don't match formal documents
+        r'ছাড়া\s+হয়েছে',  # "ছাড়া হয়েছে" → should be "প্রকাশিত হয়েছে"
+        r'বের\s+হয়েছে',  # "বের হয়েছে" → should be "প্রকাশিত হয়েছে"
+        r'আসছে\s+কি\s*না',  # "আসছে কি না"
+        r'হবে\s+কি\s*না',  # "হবে কি না"
+
+        # NEW: Banglish patterns
+        r'(form|ফর্ম)\s+(chara|ছাড়া)',  # "form chara"
+        r'(kothai|kothay)\s+(kothai|kothay)',  # "kothai kothai"
+        r'(ki|kি)\s+(ki|kি)',  # "ki ki"
     ]
 
     for pattern in unclear_patterns:
-        if re.match(pattern, query_lower):
+        if re.search(pattern, query_lower):
+            print(f"   🔍 UNCLEAR PATTERN DETECTED: {pattern}")
             return True
 
     # Check if query has no meaningful nouns/entities (just pronouns/fillers)
-    filler_words = {'eta', 'ota', 'ki', 'কি', 'ta', 'টা', 'gula', 'গুলা', 'ar', 'আর', 'o', 'ও'}
+    filler_words = {'eta', 'ota', 'ki', 'কি', 'ta', 'টা', 'gula', 'গুলা', 'ar', 'আর', 'o', 'ও',
+                    'কোথায়', 'কিভাবে', 'কেমন', 'কবে', 'হয়েছে', 'হবে', 'আছে', 'নেই'}
     meaningful_words = [w for w in words if w not in filler_words and len(w) > 2]
     if len(meaningful_words) < 2:
+        print(f"   🔍 UNCLEAR: Too few meaningful words ({len(meaningful_words)})")
+        return True
+
+    # NEW: Check for missing entity (no university/institution name)
+    entity_keywords = ['kuet', 'cuet', 'ruet', 'buet', 'du', 'ju', 'ru', 'cu', 'sust', 'nstu',
+                       'কুয়েট', 'চুয়েট', 'রুয়েট', 'বুয়েট', 'ঢাবি', 'ঢাকা', 'জাবি', 'রাবি',
+                       'চবি', 'জবি', 'মেডিকেল', 'বিশ্ববিদ্যালয়', 'ইউনিট', 'gst', 'medical']
+    has_entity = any(ent in query_lower for ent in entity_keywords)
+
+    # If query has vague question words but no specific entity, it's unclear
+    vague_question_words = ['কোথায়', 'কোন', 'কি', 'কিভাবে', 'kothai', 'kothay', 'ki', 'kon']
+    has_vague_question = any(vq in query_lower for vq in vague_question_words)
+
+    if has_vague_question and not has_entity:
+        print(f"   🔍 UNCLEAR: Vague question without specific entity")
         return True
 
     return False
+
+
+def is_potentially_comprehensive(query: str) -> bool:
+    """
+    Detect if query is asking about MULTIPLE universities/institutions (comprehensive query).
+    These queries need multi-query retrieval for complete answers.
+    """
+    import re
+    query_lower = query.lower()
+
+    # Patterns indicating comprehensive/multi-entity queries
+    comprehensive_patterns = [
+        r'কোথায়\s+কোথায়',  # where where
+        r'কি\s+কি',  # what what
+        r'কোন\s+কোন',  # which which
+        r'সকল|সব\s+',  # all
+        r'তালিকা',  # list
+        r'সবগুলো',  # all of them
+        r'বিভিন্ন',  # various
+        r'all\s+universit',  # all universities
+        r'every\s+',  # every
+        r'list\s+of',  # list of
+    ]
+
+    for pattern in comprehensive_patterns:
+        if re.search(pattern, query_lower):
+            print(f"   🔍 COMPREHENSIVE PATTERN DETECTED: {pattern}")
+            return True
+
+    return False
+
+
+def analyze_and_rewrite_query(query: str) -> dict:
+    """
+    Use GPT-4o-mini to analyze query type and generate optimized search queries.
+
+    For comprehensive queries (asking about multiple universities), generates
+    sub-queries for each major university to ensure complete retrieval.
+
+    Returns:
+        {
+            "type": "simple" | "comprehensive" | "multi_entity",
+            "rewritten_query": str,
+            "sub_queries": [str, ...],
+            "topic": str
+        }
+    """
+    import openai
+    import os
+    import json
+    import time
+
+    prompt = f"""You are a query optimizer for Bangladesh university admission search system.
+
+Query: "{query}"
+
+Analyze this query and return JSON:
+
+1. Determine query type:
+   - "simple": Asks about ONE specific university (e.g., "KUET ভর্তি পরীক্ষা কবে?")
+   - "comprehensive": Asks about MULTIPLE/ALL universities (e.g., "কোথায় কোথায় ফর্ম আছে?", "সব বিশ্ববিদ্যালয়ের তারিখ")
+   - "multi_entity": Lists specific universities (e.g., "KUET, CUET, RUET তারিখ?")
+
+2. Extract the topic:
+   - "আবেদন" (application/form)
+   - "তারিখ" (date/schedule)
+   - "ফি" (fee)
+   - "ফলাফল" (result)
+   - "যোগ্যতা" (eligibility)
+   - "সাধারণ" (general)
+
+3. Rewrite informal terms to formal:
+   - "ফর্ম ছাড়া" → "আবেদন শুরু" / "ভর্তি বিজ্ঞপ্তি"
+   - "কোথায় কোথায়" → remove, use specific names
+
+4. For "comprehensive" type, generate sub_queries for these universities:
+   - ঢাকা বিশ্ববিদ্যালয় বিজ্ঞান ইউনিট
+   - বুয়েট BUET
+   - রাজশাহী বিশ্ববিদ্যালয়
+   - জাহাঙ্গীরনগর বিশ্ববিদ্যালয়
+   - চট্টগ্রাম বিশ্ববিদ্যালয়
+   - খুলনা বিশ্ববিদ্যালয়
+   - শাহজালাল বিশ্ববিদ্যালয় SUST
+   - কুয়েট KUET
+   - চুয়েট CUET
+   - রুয়েট RUET
+   - বুটেক্স BUTEX
+   - মেডিকেল ভর্তি
+   - কৃষি গুচ্ছ
+   - জগন্নাথ বিশ্ববিদ্যালয়
+   - MIST
+
+Output ONLY valid JSON (no markdown, no explanation):
+{{"type": "comprehensive", "rewritten_query": "বিজ্ঞান বিভাগ ভর্তি আবেদন বিশ্ববিদ্যালয়", "sub_queries": ["ঢাকা বিশ্ববিদ্যালয় বিজ্ঞান আবেদন", "বুয়েট ভর্তি আবেদন", ...], "topic": "আবেদন"}}"""
+
+    print("\n" + "="*80)
+    print("🧠 SMART QUERY ANALYSIS (GPT-4o-mini)")
+    print("="*80)
+    print(f"📥 Original Query: \"{query}\"")
+    print("-"*80)
+
+    try:
+        print("⏳ Analyzing query with GPT-4o-mini...")
+        start_time = time.time()
+
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=800
+        )
+
+        elapsed_time = time.time() - start_time
+        result_text = response.choices[0].message.content.strip()
+
+        # Clean up JSON if wrapped in markdown
+        if result_text.startswith("```"):
+            result_text = result_text.split("```")[1]
+            if result_text.startswith("json"):
+                result_text = result_text[4:]
+        result_text = result_text.strip()
+
+        print(f"✅ Analysis complete ({elapsed_time:.2f}s)")
+
+        # Parse JSON
+        analysis = json.loads(result_text)
+
+        print(f"📊 Query Type: {analysis.get('type', 'unknown')}")
+        print(f"📌 Topic: {analysis.get('topic', 'unknown')}")
+        print(f"✏️  Rewritten: \"{analysis.get('rewritten_query', query)}\"")
+
+        if analysis.get('type') == 'comprehensive' and analysis.get('sub_queries'):
+            print(f"🔀 Sub-queries ({len(analysis['sub_queries'])}):")
+            for i, sq in enumerate(analysis['sub_queries'][:5], 1):
+                print(f"   {i}. {sq}")
+            if len(analysis['sub_queries']) > 5:
+                print(f"   ... and {len(analysis['sub_queries']) - 5} more")
+
+        print("="*80 + "\n")
+
+        return analysis
+
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON Parse Error: {e}")
+        print(f"   Raw response: {result_text[:200]}...")
+        print("="*80 + "\n")
+        return {
+            "type": "simple",
+            "rewritten_query": query,
+            "sub_queries": [],
+            "topic": "সাধারণ"
+        }
+    except Exception as e:
+        print(f"❌ GPT-4o-mini Error: {e}")
+        print("="*80 + "\n")
+        return {
+            "type": "simple",
+            "rewritten_query": query,
+            "sub_queries": [],
+            "topic": "সাধারণ"
+        }
+
+
+def process_query_smart(query: str) -> tuple:
+    """
+    Smart query processing - analyzes query and returns optimized search strategy.
+
+    Returns:
+        (processed_query, sub_queries, query_type, topic)
+    """
+    # Check if query needs smart analysis
+    if is_query_unclear(query) or is_potentially_comprehensive(query):
+        print(f"🔄 Query needs smart processing...")
+
+        # Use GPT-4o-mini for analysis
+        analysis = analyze_and_rewrite_query(query)
+
+        return (
+            analysis.get('rewritten_query', query),
+            analysis.get('sub_queries', []),
+            analysis.get('type', 'simple'),
+            analysis.get('topic', 'সাধারণ')
+        )
+
+    # Simple query - no processing needed
+    print(f"✅ Query is clear, no rewriting needed")
+    return (query, [], 'simple', 'সাধারণ')
+
+
+async def retrieve_comprehensive_query(hipporag, sub_queries: list, original_query: str, topic: str = None) -> dict:
+    """
+    Run retrieval for each sub-query in a comprehensive query and aggregate results.
+
+    For queries like "কোথায় কোথায় ফর্ম ছাড়া হয়েছে?" that ask about ALL universities,
+    this function runs multiple targeted retrievals to gather information from all sources.
+
+    Args:
+        hipporag: HippoRAG instance
+        sub_queries: List of sub-queries targeting different aspects
+        original_query: Original user query
+        topic: Topic of the query (e.g., "ভর্তি ফরম", "আবেদন তারিখ")
+
+    Returns:
+        dict with:
+        - all_docs: List of all retrieved documents
+        - all_scores: List of scores for each document
+        - doc_sources: Dict mapping doc to source university (if detected)
+    """
+    import time
+    import asyncio
+
+    print("\n" + "="*80)
+    print("🔍 COMPREHENSIVE QUERY RETRIEVAL")
+    print("="*80)
+    print(f"📥 Original Query: \"{original_query}\"")
+    print(f"📋 Topic: {topic or 'General'}")
+    print(f"📝 Sub-queries to process: {len(sub_queries)}")
+    for i, sq in enumerate(sub_queries):
+        print(f"   {i+1}. {sq}")
+    print("-"*80)
+
+    # Ensure hipporag is ready for retrieval
+    if not hipporag.ready_to_retrieve:
+        print("   ⚙️  Preparing retrieval objects...")
+        hipporag.prepare_retrieval_objects()
+
+    all_docs = []
+    all_scores = []
+    doc_sources = {}  # Map doc to source
+    seen_docs = set()  # Deduplicate
+
+    # Run retrieval for each sub-query
+    for i, sub_query in enumerate(sub_queries):
+        print(f"\n🔍 Sub-query {i+1}/{len(sub_queries)}: \"{sub_query}\"")
+        start_time = time.time()
+
+        try:
+            # Retrieve documents for this sub-query
+            query_solutions = hipporag.retrieve(queries=[sub_query])
+
+            if query_solutions and len(query_solutions) > 0:
+                qs = query_solutions[0]
+                docs = qs.docs if qs.docs else []
+                scores = list(qs.doc_scores) if qs.doc_scores is not None else []
+
+                print(f"   ✓ Retrieved {len(docs)} docs in {time.time() - start_time:.2f}s")
+
+                # Add unique docs
+                added_count = 0
+                for j, doc in enumerate(docs[:10]):  # Top 10 per sub-query
+                    # Create a hash for deduplication (first 200 chars)
+                    doc_hash = doc[:200] if doc else ""
+
+                    if doc_hash not in seen_docs:
+                        seen_docs.add(doc_hash)
+                        all_docs.append(doc)
+                        score = scores[j] if j < len(scores) else 0.3
+                        all_scores.append(score)
+                        added_count += 1
+
+                        # Try to detect source university from document
+                        source = detect_doc_source_university(doc)
+                        if source:
+                            doc_sources[len(all_docs) - 1] = source
+
+                print(f"   ✓ Added {added_count} unique docs (total: {len(all_docs)})")
+            else:
+                print(f"   ⚠️  No results for this sub-query")
+
+        except Exception as e:
+            print(f"   ❌ Error retrieving: {e}")
+            continue
+
+    print("\n" + "-"*80)
+    print(f"✅ COMPREHENSIVE RETRIEVAL COMPLETE")
+    print(f"   📚 Total unique docs: {len(all_docs)}")
+    print(f"   🏫 Universities detected: {len(set(doc_sources.values()))}")
+    print("="*80 + "\n")
+
+    return {
+        'all_docs': all_docs,
+        'all_scores': all_scores,
+        'doc_sources': doc_sources
+    }
+
+
+def detect_doc_source_university(doc: str) -> str:
+    """
+    Detect which university a document is about based on content.
+
+    Returns abbreviation of detected university or None.
+    """
+    import re
+
+    # University patterns
+    university_patterns = [
+        (r'ঢাকা\s*বিশ্ববিদ্যালয়|Dhaka\s*University|DU(?:\s|$)', 'DU'),
+        (r'জগন্নাথ\s*বিশ্ববিদ্যালয়|Jagannath\s*University|JNU|JnU', 'JNU'),
+        (r'রাজশাহী\s*বিশ্ববিদ্যালয়|Rajshahi\s*University|RU(?:\s|$)', 'RU'),
+        (r'চট্টগ্রাম\s*বিশ্ববিদ্যালয়|Chittagong\s*University|CU(?:\s|$)', 'CU'),
+        (r'খুলনা\s*বিশ্ববিদ্যালয়|Khulna\s*University|KU(?:\s|$)', 'KU'),
+        (r'জাহাঙ্গীরনগর\s*বিশ্ববিদ্যালয়|Jahangirnagar\s*University|JU(?:\s|$)', 'JU'),
+        (r'বুয়েট|BUET|বাংলাদেশ\s*প্রকৌশল\s*বিশ্ববিদ্যালয়', 'BUET'),
+        (r'কুয়েট|KUET|খুলনা\s*প্রকৌশল', 'KUET'),
+        (r'রুয়েট|RUET|রাজশাহী\s*প্রকৌশল', 'RUET'),
+        (r'চুয়েট|CUET|চট্টগ্রাম\s*প্রকৌশল', 'CUET'),
+        (r'শাবিপ্রবি|SUST|শাহজালাল', 'SUST'),
+        (r'বরিশাল\s*বিশ্ববিদ্যালয়|Barisal\s*University|BU(?:\s|$)', 'BU'),
+        (r'জাতীয়\s*বিশ্ববিদ্যালয়|National\s*University|NU(?:\s|$)', 'NU'),
+        (r'ইসলামী\s*বিশ্ববিদ্যালয়|Islamic\s*University|IU(?:\s|$)', 'IU'),
+        (r'নোয়াখালী\s*বিজ্ঞান\s*ও\s*প্রযুক্তি|NSTU', 'NSTU'),
+        (r'পাবনা\s*বিজ্ঞান\s*ও\s*প্রযুক্তি|PSTU', 'PSTU'),
+        (r'যশোর\s*বিজ্ঞান\s*ও\s*প্রযুক্তি|JUST', 'JUST'),
+        (r'বেগম\s*রোকেয়া\s*বিশ্ববিদ্যালয়|BRUR', 'BRUR'),
+        (r'হাজী\s*মোহাম্মদ\s*দানেশ|HSTU', 'HSTU'),
+        (r'বঙ্গবন্ধু\s*শেখ\s*মুজিবুর\s*রহমান|BSMRSTU', 'BSMRSTU'),
+        (r'মেডিকেল|Medical|MBBS', 'Medical'),
+        (r'ঢাকা\s*মেডিকেল|DMC', 'DMC'),
+    ]
+
+    doc_upper = doc.upper()
+    doc_text = doc
+
+    for pattern, abbrev in university_patterns:
+        if re.search(pattern, doc_text, re.IGNORECASE):
+            return abbrev
+
+    return None
+
+
+def generate_comprehensive_answer(hipporag, original_question: str, docs: list, scores: list, doc_sources: dict, topic: str = None) -> str:
+    """
+    Generate an answer for comprehensive queries that lists information from multiple universities.
+
+    Args:
+        hipporag: HippoRAG instance for LLM access
+        original_question: Original user question
+        docs: List of retrieved documents
+        scores: List of document scores
+        doc_sources: Dict mapping doc index to university abbreviation
+        topic: Topic of the query (e.g., "ভর্তি ফরম", "আবেদন তারিখ")
+
+    Returns:
+        Comprehensive answer listing all universities with relevant information
+    """
+    import time
+
+    print("\n" + "="*80)
+    print("🤖 COMPREHENSIVE ANSWER GENERATION")
+    print("="*80)
+    print(f"📥 Original Question: \"{original_question}\"")
+    print(f"📋 Topic: {topic or 'General'}")
+    print(f"📚 Documents: {len(docs)}")
+    print(f"🏫 Sources: {list(set(doc_sources.values()))}")
+    print("-"*80)
+
+    if not docs:
+        return generate_contextual_not_found_response(original_question)
+
+    # Group documents by university
+    docs_by_university = {}
+    for i, doc in enumerate(docs):
+        source = doc_sources.get(i, 'Unknown')
+        if source not in docs_by_university:
+            docs_by_university[source] = []
+        docs_by_university[source].append(doc)
+
+    # Build context for LLM
+    combined_context = []
+    for univ, univ_docs in docs_by_university.items():
+        combined_context.append(f"\n### {univ} সম্পর্কিত তথ্য:\n")
+        for i, doc in enumerate(univ_docs[:3]):  # Top 3 per university
+            combined_context.append(f"[{univ} Doc {i+1}]: {doc[:1200]}\n")
+
+    # Build comprehensive synthesis prompt
+    synthesis_prompt = f"""প্রশ্ন: "{original_question}"
+
+{''.join(combined_context)}
+
+**কাজ:** উপরের ডকুমেন্ট থেকে প্রশ্নের উত্তর দিন।
+
+**নির্দেশনা:**
+1. প্রতিটি বিশ্ববিদ্যালয়ের জন্য আলাদাভাবে তথ্য দিন
+2. যেসব বিশ্ববিদ্যালয়ের তথ্য পাওয়া গেছে, শুধুমাত্র সেগুলোই উল্লেখ করুন
+3. তালিকা আকারে উত্তর দিন (bullet points)
+4. প্রতিটি বিশ্ববিদ্যালয়ের নাম বোল্ড করুন
+5. যদি কোনো বিশ্ববিদ্যালয়ের তথ্য না পান, সেটি বাদ দিন
+6. শুধুমাত্র ডকুমেন্টে যা আছে তাই বলুন, অনুমান করবেন না
+
+**উদাহরণ ফরম্যাট:**
+বিজ্ঞান বিভাগের জন্য নিম্নলিখিত বিশ্ববিদ্যালয়গুলোতে আবেদন চলছে:
+
+• **ঢাকা বিশ্ববিদ্যালয় (DU):** আবেদন শুরু ১৫ জানুয়ারি
+• **জগন্নাথ বিশ্ববিদ্যালয় (JNU):** অনলাইন আবেদন চলছে
+• **রাজশাহী বিশ্ববিদ্যালয় (RU):** ফরম পূরণ শেষ তারিখ ২০ জানুয়ারি
+
+উত্তর:"""
+
+    print("📤 Prompt prepared, calling LLM...")
+    start_time = time.time()
+
+    # Get LLM from hipporag
+    llm = None
+    if hasattr(hipporag, 'answer_llm') and hipporag.answer_llm:
+        llm = hipporag.answer_llm
+    elif hasattr(hipporag, 'llm') and hipporag.llm:
+        llm = hipporag.llm
+
+    if llm is None:
+        print("   ❌ No LLM available")
+        return "দুঃখিত, উত্তর তৈরি করতে সমস্যা হয়েছে।"
+
+    try:
+        messages = [{"role": "user", "content": synthesis_prompt}]
+        result = llm.infer(messages)
+
+        # Handle tuple response: (response_message, metadata, cache_hit)
+        if isinstance(result, tuple):
+            response_message = result[0]
+        else:
+            response_message = result
+
+        print(f"   ⏱️  LLM Time: {time.time() - start_time:.2f}s")
+        print(f"   ✅ Answer generated ({len(response_message)} chars)")
+        print("="*80 + "\n")
+
+        if response_message:
+            return response_message
+    except Exception as e:
+        print(f"   ❌ Error generating answer: {e}")
+
+    return "দুঃখিত, উত্তর তৈরি করতে সমস্যা হয়েছে।"
 
 
 def rewrite_query_with_gpt4o_mini(query: str, context: str = None) -> str:
@@ -2458,21 +2949,27 @@ async def ask_question(request: QuestionRequest):
         print("-"*80)
 
         # ============================================================
-        # STEP 0: Query Clarity Check & Rewrite (if needed)
+        # STEP 0: Smart Query Analysis (clarity check + comprehensive detection)
         # ============================================================
-        print("🔍 STEP 0: Query Clarity Check")
+        print("🔍 STEP 0: Smart Query Analysis")
         original_question = request.question
         working_question = request.question
+        sub_queries_from_analysis = []
+        query_type = 'simple'
+        query_topic = None
 
-        if is_query_unclear(request.question):
-            print(f"   ⚠️  Query detected as UNCLEAR")
-            print(f"   🔄 Rewriting query with GPT-4o-mini...")
-            rewrite_start = time.time()
-            working_question = rewrite_query_with_gpt4o_mini(request.question)
-            print(f"   ⏱️  Rewrite Time: {time.time() - rewrite_start:.2f}s")
-            print(f"   ✅ Rewritten: \"{working_question}\"")
-        else:
-            print(f"   ✅ Query is clear, no rewrite needed")
+        # Use smart query processing for all queries
+        smart_start = time.time()
+        working_question, sub_queries_from_analysis, query_type, query_topic = process_query_smart(request.question)
+        print(f"   ⏱️  Analysis Time: {time.time() - smart_start:.2f}s")
+        print(f"   📝 Query Type: {query_type}")
+        print(f"   📋 Topic: {query_topic}")
+        if working_question != original_question:
+            print(f"   ✏️  Rewritten: \"{working_question}\"")
+        if sub_queries_from_analysis:
+            print(f"   🔀 Sub-queries: {len(sub_queries_from_analysis)}")
+            for i, sq in enumerate(sub_queries_from_analysis):
+                print(f"      {i+1}. {sq}")
         print("-"*80)
 
         # ============================================================
@@ -2499,6 +2996,79 @@ async def ask_question(request: QuestionRequest):
                     answer=coaching_not_found,
                     references=[]
                 )
+
+        # ============================================================
+        # COMPREHENSIVE QUERY PATH: Multi-university queries
+        # For queries like "কোথায় কোথায় ফর্ম ছাড়া হয়েছে?" that ask about ALL universities
+        # ============================================================
+        if query_type == 'comprehensive' and sub_queries_from_analysis:
+            print("🌐 COMPREHENSIVE QUERY PATH TRIGGERED")
+            print(f"   📋 Topic: {query_topic}")
+            print(f"   🔀 Sub-queries: {len(sub_queries_from_analysis)}")
+            print("-"*80)
+
+            # Step 1: Run comprehensive retrieval
+            print("🔍 STEP 1: Comprehensive Retrieval")
+            retrieval_start = time.time()
+            retrieval_result = await retrieve_comprehensive_query(
+                hipporag,
+                sub_queries_from_analysis,
+                working_question,
+                query_topic
+            )
+            print(f"   ⏱️  Retrieval Time: {time.time() - retrieval_start:.2f}s")
+
+            all_docs = retrieval_result['all_docs']
+            all_scores = retrieval_result['all_scores']
+            doc_sources = retrieval_result['doc_sources']
+
+            print(f"   📚 Total unique docs: {len(all_docs)}")
+            print(f"   🏫 Universities: {list(set(doc_sources.values()))}")
+
+            # Step 2: Generate comprehensive answer
+            print("-"*80)
+            print("🤖 STEP 2: Comprehensive Answer Generation")
+            answer_start = time.time()
+            answer = generate_comprehensive_answer(
+                hipporag,
+                working_question,
+                all_docs,
+                all_scores,
+                doc_sources,
+                query_topic
+            )
+            print(f"   ⏱️  Answer Generation Time: {time.time() - answer_start:.2f}s")
+
+            # Build references
+            references = []
+            for i, doc in enumerate(all_docs[:15]):  # Max 15 references for comprehensive
+                score = float(all_scores[i]) if i < len(all_scores) else 0.5
+                source = doc_sources.get(i, 'Unknown')
+                # Add source tag to reference content
+                content = f"[{source}] {doc[:1500]}" if len(doc) > 1500 else f"[{source}] {doc}"
+                references.append(Reference(
+                    content=content,
+                    score=max(score, 0.5)
+                ))
+
+            # Final logging
+            total_time = time.time() - request_start_time
+            print("-"*80)
+            print("✅ COMPREHENSIVE REQUEST COMPLETE")
+            if original_question != working_question:
+                print(f"   🔄 Query Rewritten: \"{original_question}\" → \"{working_question}\"")
+            print(f"   📝 Answer Length: {len(answer)} chars")
+            print(f"   📚 References: {len(references)}")
+            print(f"   🏫 Universities covered: {len(set(doc_sources.values()))}")
+            mins, secs = divmod(int(total_time), 60)
+            print(f"   ⏱️  TOTAL TIME: {mins} min {secs} sec ({total_time:.2f}s)")
+            print("="*80 + "\n")
+
+            return AnswerResponse(
+                question=original_question,
+                answer=answer,
+                references=references
+            )
 
         # ============================================================
         # STEP 1: Detect entities and query intent
@@ -2537,7 +3107,7 @@ async def ask_question(request: QuestionRequest):
 
             # Step 4: Build slot-aware synthesized answer
             print("-"*80)
-            print("🤖 STEP 4: Answer Generation (GPT-4o-mini)")
+            print("🤖 STEP 4: Answer Generation")
             answer_start = time.time()
             answer = build_slot_aware_answer(hipporag, working_question, entity_results, question_type=query_intent)
             print(f"   ⏱️  Answer Generation Time: {time.time() - answer_start:.2f}s")
@@ -2650,7 +3220,7 @@ async def ask_question(request: QuestionRequest):
                         print(f"   ⚠️  No docs matched {queried_university.upper()} filter, keeping original")
 
             # Step 5: Generate answer from filtered documents
-            print("   🤖 STEP 5: Answer Generation (GPT-4o-mini)")
+            print("   🤖 STEP 5: Answer Generation ")
             qa_start = time.time()
             query_solutions, response_messages, metadata_list = hipporag.qa(query_solutions_retrieved)
             print(f"   ⏱️  QA Time: {time.time() - qa_start:.2f}s")
@@ -2832,6 +3402,439 @@ async def get_graph_stats():
             "entity_nodes": entity_count,
             "chunk_nodes": chunk_count
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kg/stats")
+async def get_kg_stats():
+    """Get detailed knowledge graph statistics using HippoRAG's built-in method."""
+    hipporag = get_hipporag()
+
+    try:
+        # Use HippoRAG's built-in get_graph_info()
+        if hasattr(hipporag, 'get_graph_info'):
+            info = hipporag.get_graph_info()
+        else:
+            info = {}
+
+        # Add additional info
+        graph = hipporag.graph if hasattr(hipporag, 'graph') else None
+        if graph:
+            info["total_graph_nodes"] = graph.vcount()
+            info["total_graph_edges"] = graph.ecount()
+
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kg/search/{entity}")
+async def search_entity(entity: str):
+    """Search for an entity in the Knowledge Graph and return its connections."""
+    hipporag = get_hipporag()
+
+    try:
+        from src.hipporag.utils.misc_utils import compute_mdhash_id
+
+        # Compute entity key
+        entity_key = compute_mdhash_id(content=entity.lower(), prefix="entity-")
+
+        # Check if entity exists
+        exists = entity_key in hipporag.node_name_to_vertex_idx if hasattr(hipporag, 'node_name_to_vertex_idx') else False
+
+        connections = []
+        connection_details = []
+
+        if exists and hasattr(hipporag, 'graph'):
+            vertex_idx = hipporag.node_name_to_vertex_idx[entity_key]
+            neighbors = hipporag.graph.neighbors(vertex_idx)
+
+            for n_idx in neighbors[:30]:  # Limit to 30 connections
+                neighbor_name = hipporag.graph.vs[n_idx]["name"]
+                connections.append(neighbor_name)
+
+                # Try to get content for chunk nodes
+                if neighbor_name.startswith("chunk-") and hasattr(hipporag, 'chunk_embedding_store'):
+                    try:
+                        chunk_data = hipporag.chunk_embedding_store.get_row(neighbor_name)
+                        content = chunk_data.get("content", "")[:200] + "..." if chunk_data else ""
+                        connection_details.append({
+                            "key": neighbor_name,
+                            "type": "chunk",
+                            "preview": content
+                        })
+                    except:
+                        connection_details.append({"key": neighbor_name, "type": "chunk", "preview": ""})
+                else:
+                    connection_details.append({"key": neighbor_name, "type": "entity", "preview": ""})
+
+        # Also check how many chunks this entity appears in
+        chunk_count = 0
+        if exists and hasattr(hipporag, 'ent_node_to_chunk_ids'):
+            chunk_ids = hipporag.ent_node_to_chunk_ids.get(entity_key, set())
+            chunk_count = len(chunk_ids)
+
+        return {
+            "query": entity,
+            "entity_key": entity_key,
+            "exists": exists,
+            "num_connections": len(connections),
+            "num_chunks": chunk_count,
+            "connections": connection_details
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kg/visualize/{entity}", response_class=HTMLResponse)
+async def visualize_entity(entity: str, depth: int = 1):
+    """
+    Visualize an entity and its connections as an interactive graph.
+
+    Args:
+        entity: The entity name to visualize
+        depth: How many levels of connections to show (1 or 2)
+    """
+    hipporag = get_hipporag()
+
+    try:
+        from src.hipporag.utils.misc_utils import compute_mdhash_id
+
+        # Compute entity key
+        entity_key = compute_mdhash_id(content=entity.lower(), prefix="entity-")
+
+        # Check if entity exists
+        exists = entity_key in hipporag.node_name_to_vertex_idx if hasattr(hipporag, 'node_name_to_vertex_idx') else False
+
+        nodes = []
+        edges = []
+        seen_nodes = set()
+
+        if exists and hasattr(hipporag, 'graph'):
+            # Add center node
+            nodes.append({
+                "id": entity_key,
+                "label": entity,
+                "color": "#e74c3c",  # Red for search entity
+                "size": 30,
+                "font": {"size": 16, "color": "#ffffff"}
+            })
+            seen_nodes.add(entity_key)
+
+            vertex_idx = hipporag.node_name_to_vertex_idx[entity_key]
+            neighbors = hipporag.graph.neighbors(vertex_idx)
+
+            for n_idx in neighbors[:50]:  # Limit connections
+                neighbor_name = hipporag.graph.vs[n_idx]["name"]
+
+                if neighbor_name not in seen_nodes:
+                    seen_nodes.add(neighbor_name)
+
+                    # Determine node type and styling
+                    if neighbor_name.startswith("chunk-"):
+                        # Chunk node - get preview
+                        preview = ""
+                        if hasattr(hipporag, 'chunk_embedding_store'):
+                            try:
+                                chunk_data = hipporag.chunk_embedding_store.get_row(neighbor_name)
+                                preview = chunk_data.get("content", "")[:100] + "..." if chunk_data else ""
+                            except:
+                                pass
+                        nodes.append({
+                            "id": neighbor_name,
+                            "label": f"📄 {preview[:40]}..." if preview else neighbor_name[:20],
+                            "title": preview,  # Tooltip
+                            "color": "#3498db",  # Blue for chunks
+                            "size": 15,
+                            "shape": "box"
+                        })
+                    else:
+                        # Entity node - get content
+                        content = ""
+                        if hasattr(hipporag, 'entity_embedding_store'):
+                            try:
+                                ent_data = hipporag.entity_embedding_store.get_row(neighbor_name)
+                                content = ent_data.get("content", "") if ent_data else ""
+                            except:
+                                pass
+                        nodes.append({
+                            "id": neighbor_name,
+                            "label": content if content else neighbor_name[:20],
+                            "title": content,
+                            "color": "#2ecc71",  # Green for entities
+                            "size": 20
+                        })
+
+                    # Add edge
+                    edges.append({
+                        "from": entity_key,
+                        "to": neighbor_name
+                    })
+
+                    # Depth 2: Get neighbors of neighbors (only for entities)
+                    if depth >= 2 and not neighbor_name.startswith("chunk-"):
+                        if neighbor_name in hipporag.node_name_to_vertex_idx:
+                            n2_vertex_idx = hipporag.node_name_to_vertex_idx[neighbor_name]
+                            n2_neighbors = hipporag.graph.neighbors(n2_vertex_idx)
+
+                            for n2_idx in n2_neighbors[:10]:  # Limit 2nd level
+                                n2_name = hipporag.graph.vs[n2_idx]["name"]
+                                if n2_name not in seen_nodes and not n2_name.startswith("chunk-"):
+                                    seen_nodes.add(n2_name)
+                                    n2_content = ""
+                                    if hasattr(hipporag, 'entity_embedding_store'):
+                                        try:
+                                            n2_data = hipporag.entity_embedding_store.get_row(n2_name)
+                                            n2_content = n2_data.get("content", "") if n2_data else ""
+                                        except:
+                                            pass
+                                    nodes.append({
+                                        "id": n2_name,
+                                        "label": n2_content if n2_content else n2_name[:15],
+                                        "title": n2_content,
+                                        "color": "#9b59b6",  # Purple for 2nd level
+                                        "size": 12
+                                    })
+                                    edges.append({
+                                        "from": neighbor_name,
+                                        "to": n2_name
+                                    })
+
+        # Generate HTML with vis.js
+        import json
+        nodes_json = json.dumps(nodes, ensure_ascii=False)
+        edges_json = json.dumps(edges, ensure_ascii=False)
+
+        html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>KG Visualization: {entity}</title>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        body {{
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            color: #eee;
+        }}
+        #header {{
+            padding: 15px 20px;
+            background: #16213e;
+            border-bottom: 2px solid #e74c3c;
+        }}
+        #header h1 {{
+            margin: 0;
+            font-size: 24px;
+        }}
+        #header .entity {{
+            color: #e74c3c;
+        }}
+        #stats {{
+            margin-top: 10px;
+            font-size: 14px;
+            color: #888;
+        }}
+        #network {{
+            width: 100%;
+            height: calc(100vh - 120px);
+            background: #1a1a2e;
+        }}
+        #legend {{
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(22, 33, 62, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 13px;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }}
+        .legend-color {{
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }}
+        #tooltip {{
+            position: absolute;
+            background: #16213e;
+            border: 1px solid #e74c3c;
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 300px;
+            display: none;
+            z-index: 1000;
+        }}
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>🔍 Knowledge Graph: <span class="entity">{entity}</span></h1>
+        <div id="stats">
+            Nodes: {len(nodes)} | Edges: {len(edges)} |
+            Entity exists: {'✓ Yes' if exists else '✗ No'}
+        </div>
+    </div>
+    <div id="network"></div>
+    <div id="legend">
+        <div class="legend-item"><div class="legend-color" style="background:#e74c3c"></div> Search Entity</div>
+        <div class="legend-item"><div class="legend-color" style="background:#2ecc71"></div> Related Entities</div>
+        <div class="legend-item"><div class="legend-color" style="background:#3498db"></div> Document Chunks</div>
+        <div class="legend-item"><div class="legend-color" style="background:#9b59b6"></div> 2nd Level Entities</div>
+    </div>
+    <div id="tooltip"></div>
+
+    <script>
+        var nodes = new vis.DataSet({nodes_json});
+        var edges = new vis.DataSet({edges_json});
+
+        var container = document.getElementById('network');
+        var data = {{ nodes: nodes, edges: edges }};
+        var options = {{
+            nodes: {{
+                shape: 'dot',
+                font: {{
+                    size: 12,
+                    color: '#ffffff'
+                }},
+                borderWidth: 2,
+                shadow: true
+            }},
+            edges: {{
+                width: 1,
+                color: {{ color: '#555', highlight: '#e74c3c' }},
+                smooth: {{
+                    type: 'continuous'
+                }}
+            }},
+            physics: {{
+                stabilization: {{ iterations: 100 }},
+                barnesHut: {{
+                    gravitationalConstant: -3000,
+                    centralGravity: 0.3,
+                    springLength: 150,
+                    springConstant: 0.04
+                }}
+            }},
+            interaction: {{
+                hover: true,
+                tooltipDelay: 200,
+                hideEdgesOnDrag: true
+            }}
+        }};
+
+        var network = new vis.Network(container, data, options);
+
+        // Show tooltip on hover
+        network.on("hoverNode", function(params) {{
+            var nodeId = params.node;
+            var node = nodes.get(nodeId);
+            if (node && node.title) {{
+                var tooltip = document.getElementById('tooltip');
+                tooltip.innerHTML = node.title;
+                tooltip.style.display = 'block';
+                tooltip.style.left = params.event.pageX + 10 + 'px';
+                tooltip.style.top = params.event.pageY + 10 + 'px';
+            }}
+        }});
+
+        network.on("blurNode", function() {{
+            document.getElementById('tooltip').style.display = 'none';
+        }});
+
+        // Double-click to search that entity
+        network.on("doubleClick", function(params) {{
+            if (params.nodes.length > 0) {{
+                var nodeId = params.nodes[0];
+                var node = nodes.get(nodeId);
+                if (node && node.label && !nodeId.startsWith('chunk-')) {{
+                    window.location.href = '/kg/visualize/' + encodeURIComponent(node.label);
+                }}
+            }}
+        }});
+    </script>
+</body>
+</html>
+"""
+        return HTMLResponse(content=html)
+
+    except Exception as e:
+        return HTMLResponse(content=f"<h1>Error: {str(e)}</h1>", status_code=500)
+
+
+@app.get("/kg/entities")
+async def list_entities(limit: int = 100, offset: int = 0):
+    """List all entities in the Knowledge Graph."""
+    hipporag = get_hipporag()
+
+    try:
+        entities = []
+
+        if hasattr(hipporag, 'entity_embedding_store'):
+            all_entity_keys = list(hipporag.entity_embedding_store.get_all_ids())
+            total = len(all_entity_keys)
+
+            for entity_key in all_entity_keys[offset:offset + limit]:
+                try:
+                    entity_data = hipporag.entity_embedding_store.get_row(entity_key)
+                    content = entity_data.get("content", "") if entity_data else ""
+                    entities.append({
+                        "key": entity_key,
+                        "content": content
+                    })
+                except:
+                    entities.append({"key": entity_key, "content": ""})
+
+            return {
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "entities": entities
+            }
+        else:
+            return {"total": 0, "entities": []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kg/facts")
+async def list_facts(limit: int = 100, offset: int = 0):
+    """List all facts (triples) in the Knowledge Graph."""
+    hipporag = get_hipporag()
+
+    try:
+        facts = []
+
+        if hasattr(hipporag, 'fact_embedding_store'):
+            all_fact_keys = list(hipporag.fact_embedding_store.get_all_ids())
+            total = len(all_fact_keys)
+
+            for fact_key in all_fact_keys[offset:offset + limit]:
+                try:
+                    fact_data = hipporag.fact_embedding_store.get_row(fact_key)
+                    content = fact_data.get("content", "") if fact_data else ""
+                    facts.append({
+                        "key": fact_key,
+                        "content": content
+                    })
+                except:
+                    facts.append({"key": fact_key, "content": ""})
+
+            return {
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "facts": facts
+            }
+        else:
+            return {"total": 0, "facts": []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
