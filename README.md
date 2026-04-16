@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/logo.png" alt="Advance RAG Logo" width="600">
+</p>
+
 <h1 align="center">Advance RAG</h1>
 
 <p align="center">
